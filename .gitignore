@@ -1,0 +1,8 @@
+.env
+node_modules/
+.npm-cache/
+.deploy/
+/data/
+*.log
+.claude/
+/archief/

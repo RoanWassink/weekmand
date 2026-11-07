@@ -1,0 +1,11 @@
+{
+  "name": "Weekmand",
+  "short_name": "Weekmand",
+  "description": "Lokale boodschappenassistent voor Picnic",
+  "lang": "nl",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f1e8",
+  "theme_color": "#2f5a43",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

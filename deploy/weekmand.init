@@ -1,0 +1,19 @@
+#!/bin/sh /etc/rc.common
+START=95
+STOP=10
+USE_PROCD=1
+
+start_service() {
+  root=/opt/weekmand
+  local release
+  read -r release < "$root/current" || return 1
+  case "$release" in ''|*[!a-z0-9-]*) return 1 ;; esac
+
+  procd_open_instance
+  procd_set_param command "$root/runtime/node-v24.22.1-linux-arm64-musl/bin/node" \
+    "--env-file=$root/config.env" "$root/releases/$release/src/server.ts"
+  procd_set_param env HOST=127.0.0.1 PORT=8080 DB_PATH="$root/data/weekmand.sqlite"
+  procd_set_param user nobody
+  procd_set_param respawn 3600 5 5
+  procd_close_instance
+}
