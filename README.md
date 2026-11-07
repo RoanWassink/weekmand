@@ -29,6 +29,8 @@ Onder **Meer** in de app:
 - **AI-aanbieder** (optioneel): Claude, OpenAI, Mistral, DeepSeek of een lokaal model.
 - **Telegram-meldingen** (optioneel): maak een bot bij @BotFather en koppel die met een koppelcode.
 
+Stap-voor-stap uitleg voor AI-sleutels (Mistral, DeepSeek, OpenAI, Claude) en de Telegram-bot: [docs/KOPPELEN.md](docs/KOPPELEN.md).
+
 Instellingen kun je ook in een `.env`-bestand zetten; zie `.env.example`.
 
 Naar een NanoPi R4S met OpenWrt uitrollen doe je met `deploy/Update-Weekmand.ps1` (vereist PowerShell 7). Met Docker start je Weekmand met `docker compose up --build -d`.
