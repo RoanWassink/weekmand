@@ -2,6 +2,12 @@
 
 Weekmand is een lokale boodschappenassistent voor een huishouden dat bij Picnic bestelt. Het stelt een weekmenu voor, rekent uit wat er nodig is en vult alleen het verschil aan in de Picnic-mand. Het bestelt en betaalt nooit zelf: dat doe je in de Picnic-app. Het houdt de voorraad bij, meldt via Telegram wanneer de mand vóór de deadline klaar moet zijn, en is te bedienen via de webapp, chat, Claude (MCP) of Home Assistant.
 
+<p align="center">
+  <img src="docs/screenshots/week.png" alt="Weekmenu" width="240">
+  <img src="docs/screenshots/mand.png" alt="Mand met voorgestelde wijzigingen" width="240">
+  <img src="docs/screenshots/voorraad.png" alt="Voorraad" width="240">
+</p>
+
 Meer details: [docs/DETAILS.md](docs/DETAILS.md).
 
 ## Instellen
