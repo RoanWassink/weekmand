@@ -22,6 +22,7 @@ test('server: wachtwoord, API-token, CSRF en webapp', async t => {
   const page = await fetch(base + '/');
   assert.equal(page.status, 200);
   assert.match(await page.text(), /<title>Weekmand<\/title>/);
+  assert.match(page.headers.get('content-security-policy') ?? '', /img-src 'self' blob: data: https:\/\/storefront-prod\.nl\.picnicinternational\.com;/, "productfoto's van Picnic");
   for (const asset of ['/app.js', '/barcode.js', '/style.css', '/manifest.webmanifest', '/icon.svg']) {
     assert.equal((await fetch(base + asset, { headers: basic })).status, 200, asset);
   }

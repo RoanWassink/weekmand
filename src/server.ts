@@ -9,6 +9,7 @@ import { Weekmand } from './app.ts';
 import { Assistant } from './assistant.ts';
 import { Accounts, cookieValue, sessionDays } from './auth.ts';
 import { Store } from './db.ts';
+import { PICNIC_IMAGE_ORIGIN } from './shop.ts';
 import { check, Problem } from './errors.ts';
 import { HomeAssistantBridge } from './homeassistant.ts';
 import { handleMcp, openApi, version } from './mcp.ts';
@@ -152,8 +153,9 @@ async function state(req: IncomingMessage) {
 
 type Handler = (input: Record<string, any>, req: IncomingMessage) => Promise<unknown> | unknown;
 const ui: Record<string, Handler> = {
-  plan: async () => { const plan = await app.plan(); return { plan, summary: planSummary(plan) }; },
-  'plan/current': async () => { const plan = await app.currentPlan(); return { plan, summary: planSummary(plan) }; },
+  plan: async () => { const plan = await app.plan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
+  'plan/current': async () => { const plan = await app.currentPlan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
+  product: async i => app.productInfo(String(i.id ?? '')),
   apply: async i => app.applyPlan(String(i.id)),
   action: async i => handleAction(app, String(i.data)),
   chat: async (i, req) => {
@@ -307,7 +309,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' blob: data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', `default-src 'self'; img-src 'self' blob: data: ${PICNIC_IMAGE_ORIGIN}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
   const url = new URL(req.url ?? '/', 'http://x');
   const route = url.pathname;
   try {

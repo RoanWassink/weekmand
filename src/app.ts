@@ -103,6 +103,7 @@ export class Weekmand {
     this.mock = new MockShop(this.store, () => this.catalog.ingredients());
     this.picnic = options.picnic ?? new PicnicShop(this.secrets);
     this.picnic.onExpired = () => this.notify({ text: 'Je Picnic-sessie is verlopen. Meld je opnieuw aan in Weekmand (Instellingen → Picnic) om automatische aanvullingen te laten werken.', key: 'picnic-expired-' + localDate(this.now()) });
+    this.picnic.onImages = images => this.#noteImages(images);
     this.ah = options.ah ?? new AlbertHeijn(this.secrets, fetch, () => this.now());
     this.ah.onExpired = () => this.notify({ text: 'De koppeling met je AH-account is verlopen. Koppel opnieuw in Weekmand (Meer → Albert Heijn) om kassabonnen en Mijn lijst te laten werken.', key: 'ah-expired-' + localDate(this.now()) });
     this.events.setMaxListeners(20);
@@ -830,6 +831,42 @@ export class Weekmand {
 
   links() { return this.store.links(); }
 
+  /** Afbeelding-id per Picnic-product, voor de productfoto's in de webapp. Blijft bewaard na een herstart. */
+  #images: Record<string, string> | null = null;
+  #imageMap() { return this.#images ??= this.store.get<Record<string, string>>('productImages', {}); }
+  #noteImages(found: Record<string, string>) {
+    const all = this.#imageMap();
+    let changed = false;
+    for (const [id, image] of Object.entries(found)) if (all[id] !== image) { delete all[id]; all[id] = image; changed = true; }
+    if (!changed) return;
+    const ids = Object.keys(all);
+    for (const id of ids.slice(0, Math.max(0, ids.length - 2000))) delete all[id];
+    this.store.set('productImages', all);
+  }
+  productImage(productId: string): string | undefined { return this.#imageMap()[productId]; }
+
+  /** Het voorstel met de bekende productfoto's, voor de webapp. */
+  withImages<T extends { lines: { productId: string }[] }>(plan: T): T {
+    return { ...plan, lines: plan.lines.map(l => { const image = this.productImage(l.productId); return image ? { ...l, image } : l; }) };
+  }
+
+  /**
+   * Meer over één product, voor het productvenster in de webapp: foto, merk en omschrijving van de
+   * productpagina bij Picnic, en voor welk ingrediënt Weekmand het koopt (key).
+   */
+  async productInfo(id: string) {
+    check(/^[A-Za-z0-9_-]{1,64}$/.test(id), 'Onbekend product.');
+    const key = this.#productKey(id);
+    const image = this.productImage(id);
+    const base = { id, ...(image ? { image } : {}), ...(key ? { key } : {}) };
+    if (this.shopMode !== 'picnic' || !this.picnic.ready()) return base;
+    try {
+      return { ...await this.picnic.product(id), ...base };
+    } catch {
+      return base;
+    }
+  }
+
   /** Een product dat eerder gezocht is; anders opnieuw zoeken op de naam (de zoekcache verdwijnt bij een herstart). */
   async #findProduct(productId: string, hint?: string) {
     const cached = this.#searchCache.get(productId);
@@ -1080,7 +1117,14 @@ export class Weekmand {
     const { cart } = await this.#readCart(shop, maxAge);
     this.#rememberCartRecipes(cart);
     const ledger = this.#syncLedger(cart);
-    return { shop: shop.label, id: cart.id, totalCents: cart.totalCents, lines: cart.lines.map(l => ({ ...l, byWeekmand: ledger.lines[l.id] ?? 0 })) };
+    return {
+      shop: shop.label, id: cart.id, totalCents: cart.totalCents, lines: cart.lines.map(l => {
+        const byWeekmand = ledger.lines[l.id] ?? 0;
+        // Voor regels van Weekmand: het ingrediënt, zodat je in de webapp een ander product kunt kiezen.
+        const key = byWeekmand ? this.#productKey(l.id) : undefined;
+        return { ...l, byWeekmand, ...(key ? { key } : {}) };
+      }),
+    };
   }
 
   /** Picnic-recepten in de mand onthouden: na de bestelling zijn dat "bestelde" recepten. */

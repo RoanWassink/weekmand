@@ -208,6 +208,11 @@ Zacht afgeronde rechthoeken: kaarten 14 px, knoppen en velden 10 px, de knoppen 
 - **Hover / Focus:** een tint donkerder; focus is een groene ring van 2 px met 2 px afstand.
 - **Secondary:** transparant met een halfgroene rand en groene tekst. **Ghost:** zonder rand, voor rustige acties ("Bijwerken").
 
+### Productfoto
+- **Wat:** de foto van Picnic bij een product (Picnic-mand, product kiezen), zodat je ziet wélk product het is (spuitbus of bekertje).
+- **Style:** 44 px vierkant, 8 px rond, 1 px Lijn, op een witte ondergrond (`--photo`, ook in het donkere thema). Zonder foto een leeg vlak in Oppervlak-2, zodat de rij op één lijn blijft.
+- **Productvenster:** tik op een regel; grote foto (max. 240 px), maat, prijs per stuk en per kilo of liter, merk en omschrijving. Bij een product van Weekmand de knop "Ander product kiezen".
+
 ### Chips
 - **Style:** rond, wit oppervlak met een sterke lijn, 36 px hoog.
 - **State:** geselecteerd wordt Basilicum met lichte tekst; gebruikt als filter (receptenoverzicht, "is op"-knoppen).

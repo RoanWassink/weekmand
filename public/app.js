@@ -413,17 +413,63 @@ function scheduleCalc() {
   }, plan ? 50 : 300);
 }
 
+// Productfoto's komen rechtstreeks van Picnic (openbaar); de CSP in server.ts staat deze bron toe.
+const PICNIC_IMAGES = 'https://storefront-prod.nl.picnicinternational.com/static/images/';
+function productPhoto(image, size = 'small', cls = 'thumb') {
+  const none = () => el('span', { class: cls + ' none', 'aria-hidden': 'true' });
+  if (!image) return none();
+  const img = el('img', { class: cls, src: `${PICNIC_IMAGES}${encodeURIComponent(image)}/${size}.png`, alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer' });
+  img.addEventListener('error', () => img.replaceWith(none()), { once: true });
+  return img;
+}
+
+/**
+ * Productvenster: grote foto, maat, prijs en wat Picnic over het product zegt, om te zien of het het
+ * juiste product is (spuitbus of bekertje). Bij een product van Weekmand: een ander product kiezen.
+ */
+let productToken = null;
+function productDialog(p) {
+  const token = productToken = {};
+  const photo = el('div', { class: 'product-photo' }, productPhoto(p.image, 'large', 'photo'));
+  const facts = el('p', { class: 'muted' }, [p.unitQuantity, p.cents ? money(p.cents) + ' per stuk' : null, p.unitPrice].filter(Boolean).join(' · '));
+  const brand = el('p', { class: 'small muted' });
+  const about = el('p', { class: 'product-about small' });
+  const tags = el('div', { class: 'row' });
+  const choose = key => el('div', { class: 'stack' },
+    el('p', { class: 'hint' }, `Weekmand koopt dit voor ${ingredientName(key)}. Klopt het niet? Kies een ander product; bij de volgende berekening wisselt Weekmand het om in je mand.`),
+    btn('Ander product kiezen', () => linkDialog(key), 'secondary'));
+  const link = el('div', {}, p.key ? choose(p.key) : null);
+  dialog(p.name, el('div', { class: 'stack product-sheet' }, photo, facts, p.context ? el('p', { class: 'small' }, p.context) : null, brand, about, tags, link));
+  api('product', { id: p.id }).then(d => {
+    if (token !== productToken || !$('dialog').open) return;
+    if (!p.image && d.image) put(photo, productPhoto(d.image, 'large', 'photo'));
+    if (d.brand) brand.textContent = d.brand;
+    if (d.description) about.textContent = d.description;
+    if (!p.unitPrice && d.unitPrice) facts.textContent = [facts.textContent, d.unitPrice].filter(Boolean).join(' · ');
+    put(tags, ...(d.labels ?? []).map(t => el('span', { class: 'tag' }, t)));
+    if (!p.key && d.key) put(link, choose(d.key));
+  }).catch(() => {});
+}
+
 /** De echte Picnic-mand, altijd zichtbaar. */
 async function loadCartLines() {
   if (!S?.shop.ready) { put($('cart-lines'), el('p', { class: 'muted small' }, 'Niet aangemeld bij Picnic.')); return; }
   try {
     const cart = await api('cart', {});
     const mine = cart.lines.reduce((n, l) => n + (l.byWeekmand ? 1 : 0), 0);
+    const photos = cart.lines.some(l => l.image);
     put($('cart-lines'),
       el('p', {}, el('b', {}, `${cart.lines.reduce((n, l) => n + l.quantity, 0)} producten · ${money(cart.totalCents)}`),
         el('span', { class: 'muted small' }, mine ? ` · ${mine} regels door Weekmand toegevoegd` : '')),
-      ...cart.lines.map(l => el('div', { class: 'pantry-item' }, el('span', { class: 'grow' }, `${l.quantity}× ${l.name}`, el('span', { class: 'muted small' }, ` · ${l.unitQuantity}`)),
-        l.byWeekmand ? el('span', { class: 'pill' }, l.byWeekmand === l.quantity ? 'Weekmand' : `${l.byWeekmand} door Weekmand`) : el('span', { class: 'pill' }, 'zelf'))),
+      ...cart.lines.map(l => {
+        const who = l.byWeekmand ? (l.byWeekmand === l.quantity ? 'Weekmand' : `${l.byWeekmand} door Weekmand`) : 'zelf';
+        const context = `${l.quantity}× in je Picnic-mand · ${l.byWeekmand ? (l.byWeekmand === l.quantity ? 'door Weekmand' : `${l.byWeekmand} door Weekmand`) : 'zelf toegevoegd'}`;
+        return el('button', { type: 'button', class: 'product-row', 'aria-label': `${l.quantity}× ${l.name}, ${l.unitQuantity}: bekijk het product`, onclick: () => productDialog({ ...l, context }) },
+          photos ? productPhoto(l.image) : null,
+          el('span', { class: 'grow' }, el('span', { class: 'product-name' }, `${l.quantity}× ${l.name}`),
+            el('span', { class: 'muted small' }, [l.unitQuantity, l.unitPrice].filter(Boolean).join(' · '))),
+          el('span', { class: 'pill' }, who));
+      }),
       !cart.lines.length ? el('p', { class: 'muted small' }, 'Je Picnic-mand is leeg.') : null);
     applyListSearch('cart-lines');
   } catch (e) { put($('cart-lines'), el('p', { class: 'warn small' }, e.message)); }
@@ -572,7 +618,9 @@ function renderPlan() {
     changes.length ? searchBox('plan-lines', 'Zoek in het voorstel') : null,
     el('div', { id: 'plan-lines' }, ...changes.map(l => swipeable(el('div', { class: 'line' },
       el('span', { class: 'qty ' + (l.add ? 'add' : 'remove') }, l.add ? '+' + l.add : '−' + l.remove),
-      el('div', {}, el('div', {}, l.product, el('span', { class: 'muted small' }, ' · ' + l.unitQuantity)),
+      el('div', {}, el('div', {},
+        el('button', { type: 'button', class: 'product-link', onclick: () => productDialog({ id: l.productId, name: l.product, unitQuantity: l.unitQuantity, cents: l.cents, image: l.image, key: l.key, context: l.add ? `Weekmand zet er ${l.add} bij.` : `Weekmand haalt er ${l.remove} uit.` }) }, l.product),
+        el('span', { class: 'muted small' }, ' · ' + l.unitQuantity)),
         el('div', { class: 'why' }, l.reason),
         l.need !== undefined ? el('div', { class: 'why' }, [
           'nodig ' + amountText(l.need, l.unit),
@@ -648,7 +696,8 @@ $('regular-form').onsubmit = e => {
   e.preventDefault();
   run(async () => {
     const results = await api('search', { query: $('regular-query').value });
-    put($('regular-results'), ...results.map(p => el('div', { class: 'pantry-item' },
+    const photos = results.some(p => p.image);
+    put($('regular-results'), ...results.map(p => el('div', { class: 'pantry-item' }, photos ? productPhoto(p.image) : null,
       el('span', { class: 'grow' }, p.name, el('span', { class: 'muted small' }, ` · ${p.unitQuantity} · ${money(p.cents)}`)),
       btn('+ vast', () => run(async () => { await api('regular', { productId: p.id, enabled: true, quantity: 1 }); put($('regular-results'), ); planStale = true; }), 'small'))));
   }, { reload: false });
@@ -666,9 +715,11 @@ async function linkDialog(key) {
   const input = el('input', { value: name, 'aria-label': 'Zoekterm' });
   const search = async () => {
     const products = await api('search', { query: input.value }).catch(e => { toast(e.message, true); return []; });
-    put(results, ...products.map(p => el('button', { type: 'button', class: 'recipe-option', onclick: () => run(async () => {
+    const photos = products.some(p => p.image);
+    put(results, ...products.map(p => el('button', { type: 'button', class: 'recipe-option product-option', onclick: () => run(async () => {
       await api('link', { name: key, productId: p.id }); closeDialog(); toast(`${name} gekoppeld aan ${p.name}.`); planStale = true;
-    }) }, el('b', {}, p.name), el('span', { class: 'muted small' }, `${p.unitQuantity} · ${money(p.cents)}${p.available ? '' : ' · niet leverbaar'}`))));
+    }) }, photos ? productPhoto(p.image) : null, el('span', { class: 'grow' }, el('b', {}, p.name),
+      el('span', { class: 'muted small' }, [p.brand, p.unitQuantity, money(p.cents), p.unitPrice, p.available ? null : 'niet leverbaar'].filter(Boolean).join(' · '))))));
   };
   dialog('Product voor ' + name, el('div', { class: 'stack' }, el('form', { class: 'row', onsubmit: e => { e.preventDefault(); search(); } }, input, el('button', {}, 'Zoek')), results));
   search();

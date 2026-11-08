@@ -13,6 +13,8 @@
   --surface-2: oklch(95% 0.013 145);
   --line: oklch(90.5% 0.014 145);
   --line-strong: oklch(84% 0.018 145);
+  /* Ondergrond voor productfoto's: Picnic levert ze op wit, ook in het donkere thema. */
+  --photo: oklch(100% 0 0);
   /* Tekst */
   --ink: oklch(23% 0.025 155);
   --ink-2: oklch(46% 0.02 155);
@@ -477,3 +479,21 @@ button.prod-row:hover { background: color-mix(in oklch, var(--surface-2) 70%, tr
 .pick-note { color: var(--ink); }
 #tab-week.picking { padding-bottom: 240px; }
 @media (min-width: 960px) { .pick-bar { left: calc(220px + var(--s5)); bottom: var(--s5); } }
+
+/* ─────────────── Productfoto's (Picnic) ─────────────── */
+.thumb { flex: none; width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 8px; background: var(--photo); object-fit: contain; }
+.thumb.none { background: var(--surface-2); }
+.product-row { display: flex; align-items: center; gap: var(--s3); width: 100%; min-height: 60px; padding: var(--s2) 0; border: 0; border-radius: 0; background: none; color: var(--ink); font-weight: 400; text-align: left; }
+.product-row + .product-row { border-top: 1px solid var(--line); }
+.product-row:hover { background: none; }
+.product-row:hover .product-name { color: var(--brand-text); text-decoration: underline; text-underline-offset: .2em; }
+.product-row .grow, .product-option .grow { display: grid; gap: 2px; min-width: 0; }
+.product-name { font-weight: 600; }
+.recipe-option.product-option { display: flex; align-items: center; gap: var(--s3); }
+.product-link { display: inline; min-height: 0; padding: 0; border: 0; background: none; font: inherit; color: var(--ink); text-align: left; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: .2em; }
+.product-link:hover { background: none; color: var(--brand-text); text-decoration-color: currentColor; }
+.product-photo { display: grid; place-items: center; padding: var(--s3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--photo); }
+.product-photo:has(> .none) { display: none; }
+.product-photo .photo { width: min(100%, 240px); aspect-ratio: 1; object-fit: contain; }
+.product-about { margin: 0; line-height: 1.5; }
+.product-sheet > :empty { display: none; }
