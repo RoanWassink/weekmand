@@ -21,8 +21,6 @@ Eenmalig, op de computer waarop Weekmand draait:
    ```sh
    git clone https://github.com/RoanWassink/weekmand.git
    ```
-
-   Is de repo privé, log dan eerst in met `gh auth login` en gebruik `gh repo clone RoanWassink/weekmand`.
 3. Ga **in de map van Weekmand** staan. `npm start` werkt alleen daar, niet in een willekeurige map:
 
    ```sh
