@@ -1,8 +1,9 @@
 import type PicnicClient from 'picnic-api';
 
-export type HistoryLine = {productId:string; name:string; pack:string; quantity:number};
+/** cents: de regelprijs na korting (voor het budget). */
+export type HistoryLine = {productId:string; name:string; pack:string; quantity:number; cents?:number};
 export type HistoryDelivery = {
-  id:string; date:string; totalCents:number;
+  id:string; date:string; totalCents:number; savingsCents?:number; paidCents?:number;
   orders:{id:string; orderedAt:string; items:HistoryLine[]}[];
 };
 export type PicnicHistory = { syncedAt:string; deliveries:HistoryDelivery[] };
@@ -32,11 +33,13 @@ export async function importDeliveries(reader: DeliveryReader, now = Date.now())
         if (!item.productId || !item.name || !Number.isSafeInteger(item.quantity) || item.quantity < 1) {
           throw new Error('Invalid delivery line');
         }
-        return {productId:item.productId,name:item.name,pack:item.unitQuantity,quantity:item.quantity};
+        return {productId:item.productId,name:item.name,pack:item.unitQuantity,quantity:item.quantity,...(Number.isSafeInteger(item.displayPrice) ? {cents:item.displayPrice} : {})};
       });
       return {id:order.id,orderedAt:order.creationTime,items};
     });
-    deliveries.push({id,date,totalCents:delivery.totalPrice,orders});
+    const savings = (delivery.promotionSavings || 0) + (delivery.membershipSavings || 0);
+    const paid = delivery.orders.filter(order=>order.status !== 'CANCELLED').reduce((sum,order)=>sum+(order.checkoutTotalPrice||0),0);
+    deliveries.push({id,date,totalCents:delivery.totalPrice,paidCents:paid,...(savings > 0 ? {savingsCents:savings} : {}),orders});
   }
   return {syncedAt:new Date(now).toISOString(),deliveries:deliveries.sort((a,b)=>b.date.localeCompare(a.date))};
 }

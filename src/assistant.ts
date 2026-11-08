@@ -1,6 +1,8 @@
-import { converse, labelOf, modelOf, providers, testConnection } from './ai.ts';
-import type { AIConfig, Provider } from './ai.ts';
-import type { Weekmand } from './app.ts';
+import { converse, labelOf, modelOf, providers, testConnection, visionModels } from './ai.ts';
+import type { AIConfig, ImageInput, Provider } from './ai.ts';
+import type { ReceiptMatch, Weekmand } from './app.ts';
+import { budgetCategories, categoryKeys, kindKeys } from './budget.ts';
+import type { BudgetCategory, ReceiptPhoto, SpendKind } from './budget.ts';
 import { normalize } from './catalog.ts';
 import { check, Problem } from './errors.ts';
 import { portions } from './planner.ts';
@@ -65,6 +67,181 @@ export class Assistant {
   disconnect() {
     this.#session = null;
     this.#app.secrets.set('ai', undefined);
+  }
+
+  /**
+   * Afgekorte regels van een AH-kassabon ('TOMAATBLOKJE', 'KL KEUKEN') koppelen aan ingrediënten.
+   * Eén aanroep; het model antwoordt via één tool, zodat de uitkomst gestructureerd is.
+   * Naar de AI gaan alleen de bonregels en de namen van de ingrediënten.
+   */
+  async matchReceiptLines(lines: string[], ingredients: { key: string; name: string; unit: string }[]): Promise<ReceiptMatch[] | null> {
+    const active = this.config();
+    if (!active) return null;
+    let answers: ReceiptMatch[] = [];
+    const kinds: Record<string, ReceiptMatch['kind']> = { bestaand: 'existing', nieuw: 'new', 'geen-boodschap': 'ignore', onbekend: 'unknown' };
+    await converse(active.config, {
+      system: `Je koppelt regels van Albert Heijn-kassabonnen aan ingrediënten van een boodschappenapp. Bonregels zijn afgekort en in hoofdletters: "TOMAATBLOKJE" = tomatenblokjes, "TIJGER WIT" = wit tijgerbrood, "AH GEMALEN" = gemalen koffie, "KL KEUKEN" = keukenrol.
+Per regel:
+- bestaand: het ingrediënt staat in de lijst; geef de sleutel.
+- nieuw: eten of drinken dat niet in de lijst staat; geef een korte Nederlandse naam, eenheid en categorie.
+- geen-boodschap: geen eten of drinken (keukenrol, vuilniszakken, cadeaus) en niet in de lijst.
+- onbekend: je weet echt niet wat het is.
+Geef bij per_stuk de inhoud van één stuk in de eenheid van het ingrediënt als je die redelijk weet (blik tomatenblokjes 400 g, pak melk 1000 ml, brood 800 g). Roep koppel_bonregels precies één keer aan met alle regels.`,
+      context: 'Ingrediënten (sleutel: naam, eenheid):\n' + ingredients.map(i => `${i.key}: ${i.name} (${i.unit})`).join('\n'),
+      history: [],
+      message: 'Bonregels:\n' + lines.map(l => '- ' + l).join('\n'),
+      tools: [{
+        name: 'koppel_bonregels', description: 'Sla de koppeling van alle bonregels op.',
+        input: {
+          type: 'object', required: ['regels'], additionalProperties: false,
+          properties: {
+            regels: {
+              type: 'array',
+              items: {
+                type: 'object', required: ['bon', 'soort'], additionalProperties: false,
+                properties: {
+                  bon: { type: 'string', description: 'De bonregel precies zoals gegeven.' },
+                  soort: { type: 'string', enum: Object.keys(kinds) },
+                  sleutel: { type: 'string', description: 'Bij bestaand: de sleutel uit de lijst.' },
+                  naam: { type: 'string', description: 'Bij nieuw: korte naam, bijv. "Tijgerbrood".' },
+                  eenheid: { type: 'string', enum: ['g', 'ml', 'st'] },
+                  categorie: { type: 'string', enum: ['groente-fruit', 'aardappel', 'vlees', 'vis', 'vega', 'zuivel-eieren', 'kaas', 'brood', 'pasta-rijst', 'conserven', 'kruiden-sauzen', 'olie-azijn', 'bakken', 'diepvries', 'drinken', 'ontbijt', 'snacks', 'huishouden'] },
+                  per_stuk: { type: 'number', description: 'Inhoud van één stuk in de eenheid van het ingrediënt.' },
+                },
+              },
+            },
+          },
+        },
+      }],
+      run: async call => {
+        if (call.name !== 'koppel_bonregels') return { content: 'Onbekende tool.', isError: true };
+        const rows = (call.input as { regels?: unknown })?.regels;
+        answers = (Array.isArray(rows) ? rows : []).flatMap((r: any) => r && typeof r.bon === 'string' && kinds[r.soort] ? [{
+          receipt: r.bon, kind: kinds[r.soort], key: r.sleutel, name: r.naam, unit: r.eenheid ?? ingredients.find(i => i.key === r.sleutel)?.unit, category: r.categorie, amount: r.per_stuk,
+        }] : []);
+        return { content: 'Opgeslagen.', isError: false };
+      },
+      maxSteps: 2,
+    });
+    return answers;
+  }
+
+  /**
+   * Producten indelen voor het budget: categorie en of het nodig is of een extraatje.
+   * Alleen productnamen gaan naar de AI. null: er is geen AI gekoppeld.
+   */
+  async classifyProducts(names: string[]): Promise<{ name: string; category: BudgetCategory; kind: SpendKind }[] | null> {
+    const active = this.config();
+    if (!active) return null;
+    let answers: { name: string; category: BudgetCategory; kind: SpendKind }[] = [];
+    await converse(active.config, {
+      system: `Je deelt boodschappen in voor het huishoudbudget van een Nederlands gezin. De namen komen van Picnic of van Albert Heijn-kassabonnen (afgekort, hoofdletters: "TOMAATBLOKJE" = tomatenblokjes, "KL KEUKEN" = keukenrol).
+Per product een categorie en een soort:
+- nodig: gewone boodschappen voor maaltijden, ontbijt en lunch, ook koffie, thee, melk, water en fruit.
+- extra: wat je niet nodig hebt maar lekker is: snoep, chips, koek, gebak, ijs, frisdrank, energydrank, alcohol, luxe tussendoortjes en traktaties.
+- geen-eten: huishouden, schoonmaak, verzorging, baby, huisdier, cadeaus.
+Twijfel je tussen nodig en extra, kies dan nodig. Roep deel_in precies één keer aan met alle producten.`,
+      context: 'Categorieën: ' + budgetCategories.map(c => `${c.key} (${c.label})`).join(', '),
+      history: [],
+      message: 'Producten:\n' + names.map(n => '- ' + n).join('\n'),
+      tools: [{
+        name: 'deel_in', description: 'Sla de indeling van alle producten op.',
+        input: {
+          type: 'object', required: ['producten'], additionalProperties: false,
+          properties: {
+            producten: {
+              type: 'array',
+              items: {
+                type: 'object', required: ['naam', 'categorie', 'soort'], additionalProperties: false,
+                properties: {
+                  naam: { type: 'string', description: 'De productnaam precies zoals gegeven.' },
+                  categorie: { type: 'string', enum: categoryKeys },
+                  soort: { type: 'string', enum: kindKeys },
+                },
+              },
+            },
+          },
+        },
+      }],
+      run: async call => {
+        if (call.name !== 'deel_in') return { content: 'Onbekende tool.', isError: true };
+        const rows = (call.input as { producten?: unknown })?.producten;
+        answers = (Array.isArray(rows) ? rows : []).flatMap((r: any) => r && typeof r.naam === 'string' && categoryKeys.includes(r.categorie) && kindKeys.includes(r.soort)
+          ? [{ name: r.naam, category: r.categorie, kind: r.soort }] : []);
+        return { content: 'Opgeslagen.', isError: false };
+      },
+      maxSteps: 2,
+      maxTokens: 4000,
+    });
+    return answers;
+  }
+
+  /**
+   * Een foto van een kassabon lezen: winkel, datum, totaal, productregels (met categorie en of het
+   * nodig of extra is) en kortingen. Alleen de foto gaat naar de AI. null: er is geen AI gekoppeld.
+   */
+  async readReceiptPhoto(image: ImageInput, today: string): Promise<ReceiptPhoto | null> {
+    const active = this.config();
+    if (!active) return null;
+    const config = active.config;
+    check(config.provider in visionModels, `${labelOf(config)} kan geen foto's lezen. Kies onder Meer → AI-aanbieder Claude, OpenAI of Mistral.`, 422);
+    let found = null as ReceiptPhoto | null;
+    const input = (model?: string) => ({
+      system: `Je leest een foto van een Nederlandse kassabon voor het huishoudbudget. Neem de productregels over zoals ze op de bon staan, met aantal en het regelbedrag in euro (wat er voor die regel betaald moest worden, vóór kortingen onderaan). Kortingen, bonus en zegels onderaan zijn aparte regels met een negatief bedrag. Statiegeld is een gewone regel. Sla bonuskaart- en airmilesnummers, btw, betaalregels en wisselgeld over. Het totaal is wat er betaald is. Per product: een categorie, en of het nodig is (gewone boodschappen), extra (snoep, chips, koek, gebak, ijs, frisdrank, alcohol) of geen eten (schoonmaak, verzorging, cadeaus). Staat er geen jaar bij de datum, neem dan het jaar van vandaag. Is de foto onleesbaar of geen kassabon, roep lees_bon dan aan met een lege lijst regels. Roep lees_bon precies één keer aan.`,
+      context: `Vandaag is het ${today}. Categorieën: ` + budgetCategories.map(c => `${c.key} (${c.label})`).join(', '),
+      history: [], message: 'Lees deze kassabon.', images: [image], maxSteps: 2, maxTokens: 6000, ...(model ? { model } : {}),
+      tools: [{
+        name: 'lees_bon', description: 'Sla de gelezen kassabon op.',
+        input: {
+          type: 'object', required: ['winkel', 'datum', 'totaal', 'regels'], additionalProperties: false,
+          properties: {
+            winkel: { type: 'string', description: 'Naam van de winkel, bijv. "Lidl" of "Albert Heijn".' },
+            datum: { type: 'string', description: 'Datum van de bon als JJJJ-MM-DD.' },
+            totaal: { type: 'number', description: 'Betaald totaal in euro.' },
+            regels: {
+              type: 'array',
+              items: {
+                type: 'object', required: ['naam', 'aantal', 'bedrag'], additionalProperties: false,
+                properties: {
+                  naam: { type: 'string' }, aantal: { type: 'number' },
+                  bedrag: { type: 'number', description: 'Regelbedrag in euro.' },
+                  categorie: { type: 'string', enum: categoryKeys }, soort: { type: 'string', enum: kindKeys },
+                },
+              },
+            },
+            kortingen: {
+              type: 'array',
+              items: { type: 'object', required: ['naam', 'bedrag'], additionalProperties: false, properties: { naam: { type: 'string' }, bedrag: { type: 'number', description: 'Negatief bedrag in euro.' } } },
+            },
+          },
+        },
+      }],
+      run: async (call: { name: string; input: unknown }) => {
+        if (call.name !== 'lees_bon') return { content: 'Onbekende tool.', isError: true };
+        const r = call.input as any;
+        const cents = (v: unknown) => Math.round(Number(v) * 100);
+        found = {
+          shop: String(r?.winkel ?? '').trim().slice(0, 60),
+          date: String(r?.datum ?? ''),
+          totalCents: Number.isFinite(Number(r?.totaal)) ? cents(r.totaal) : 0,
+          lines: (Array.isArray(r?.regels) ? r.regels : []).flatMap((l: any) => l && typeof l.naam === 'string' && Number.isFinite(Number(l.bedrag)) ? [{
+            name: l.naam.trim().slice(0, 80), quantity: Number(l.aantal) > 0 ? Number(l.aantal) : 1, cents: cents(l.bedrag),
+            ...(categoryKeys.includes(l.categorie) ? { category: l.categorie } : {}), ...(kindKeys.includes(l.soort) ? { kind: l.soort } : {}),
+          }] : []).slice(0, 200),
+          discounts: (Array.isArray(r?.kortingen) ? r.kortingen : []).flatMap((k: any) => k && typeof k.naam === 'string' && Number(k.bedrag) ? [{ name: k.naam.trim().slice(0, 80), cents: -Math.abs(cents(k.bedrag)) }] : []).slice(0, 50),
+        };
+        return { content: 'Opgeslagen.', isError: false };
+      },
+    });
+    try {
+      await converse(config, input());
+    } catch (error) {
+      // Kan het gekozen model geen foto's lezen, dan het fotomodel van dezelfde aanbieder.
+      const fallback = visionModels[config.provider];
+      if (!(error instanceof Problem) || error.status !== 422 || !fallback || fallback === modelOf(config)) throw error;
+      await converse(config, input(fallback));
+    }
+    return found;
   }
 
   /** Verwerk een chatbericht: met een taalmodel als dat gekoppeld is, anders met vaste commando's. */

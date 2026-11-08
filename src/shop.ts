@@ -296,6 +296,9 @@ export class PicnicShop implements Shop {
   }
 
   history(now = Date.now()) { return this.#call(c => importDeliveries(c.delivery, now)); }
+  /** Alle voltooide bezorgingen met hun totaal (één verzoek), voor het budget. */
+  deliverySummaries() { return this.#call(c => c.delivery.getDeliverySummaries(['COMPLETED'])); }
+  delivery(id: string) { return this.#call(c => c.delivery.getDelivery(id)); }
 
   savedRecipes() { return this.#call(c => c.recipe.getSavedRecipes()); }
   userRecipes() { return this.#call(c => c.recipe.getUserDefinedRecipes()); }

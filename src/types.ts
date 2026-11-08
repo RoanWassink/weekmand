@@ -44,7 +44,7 @@ export type RecipeDef = {
   steps: string;
 };
 
-export type Recipe = RecipeDef & { source: 'builtin' | 'user' | 'ai' | 'picnic' };
+export type Recipe = RecipeDef & { source: 'builtin' | 'user' | 'ai' | 'picnic' | 'web' };
 
 export type Household = {
   adults: number;

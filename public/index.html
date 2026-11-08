@@ -18,11 +18,16 @@
   <span class="badge" id="shop-badge"></span>
   <span class="spacer"></span>
   <span class="deadline" id="deadline" hidden></span>
+  <button type="button" class="top-chat" id="chat-button" aria-label="Chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg><span class="unread" id="chat-unread" hidden></span></button>
 </header>
 
 <main>
   <!-- Week -->
   <section class="tab active" id="tab-week" aria-label="Weekmenu">
+    <nav class="segmented two view-switch" aria-label="Menu of recepten">
+      <a href="#week" aria-current="page">Menu</a>
+      <a href="#recipes">Recepten</a>
+    </nav>
     <div id="delivery-card" class="hero"></div>
     <div id="suggestions" class="notices"></div>
     <form id="propose-form" class="wish">
@@ -111,18 +116,43 @@
       <button type="button" class="ghost" id="pantry-rebuild">Voorraad opnieuw opbouwen uit laatste levering</button>
       <p class="hint">Vervangt alle hoeveelheden door de laatste Picnic-levering, min wat er sindsdien gegeten is.</p>
     </div>
+    <div class="quiet-action" id="ah-receipts-action" hidden>
+      <button type="button" class="ghost" id="ah-receipts">Kassabonnen van AH ophalen</button>
+      <p class="hint">Telt wat je in de AH-winkel kocht bij de voorraad. Gebeurt ook vanzelf, elke vier uur.</p>
+    </div>
+  </section>
+
+  <!-- Budget -->
+  <section class="tab" id="tab-budget" aria-label="Budget">
+    <div class="tab-head">
+      <h2>Budget</h2>
+      <div class="row">
+        <button type="button" class="secondary small" id="budget-photo">Foto van bon</button>
+        <button type="button" class="ghost small" id="budget-sync">Bijwerken</button>
+      </div>
+      <input type="file" id="budget-photo-input" accept="image/*" hidden>
+    </div>
+    <div class="segmented three" role="tablist" aria-label="Periode" id="budget-periods">
+      <button type="button" role="tab" data-period="week" aria-selected="false">Week</button>
+      <button type="button" role="tab" data-period="month" aria-selected="true">Maand</button>
+      <button type="button" role="tab" data-period="year" aria-selected="false">Jaar</button>
+    </div>
+    <div id="budget"><p class="hint">Uitgaven laden…</p></div>
   </section>
 
   <!-- Recepten -->
   <section class="tab" id="tab-recipes" aria-label="Recepten">
-    <h2>Recepten</h2>
-    <div class="segmented" role="tablist" aria-label="Receptenoverzicht" id="recipe-tabs">
-      <button type="button" role="tab" data-sub="eaten" aria-selected="true">Gegeten</button>
-      <button type="button" role="tab" data-sub="favorites" aria-selected="false">Favorieten</button>
-      <button type="button" role="tab" data-sub="picnic" aria-selected="false">Picnic</button>
-      <button type="button" role="tab" data-sub="all" aria-selected="false">Alle</button>
+    <nav class="segmented two view-switch" aria-label="Menu of recepten">
+      <a href="#week">Menu</a>
+      <a href="#recipes" aria-current="page">Recepten</a>
+    </nav>
+    <div class="chips recipe-filter" id="recipe-tabs" role="group" aria-label="Welke recepten">
+      <button type="button" class="chip" data-sub="eaten" aria-pressed="true">Gegeten</button>
+      <button type="button" class="chip" data-sub="favorites" aria-pressed="false">Favorieten</button>
+      <button type="button" class="chip" data-sub="picnic" aria-pressed="false">Picnic</button>
+      <button type="button" class="chip" data-sub="all" aria-pressed="false">Alle</button>
     </div>
-    <div id="recipes-panel" role="tabpanel"></div>
+    <div id="recipes-panel"></div>
   </section>
 
   <!-- Chat -->
@@ -159,6 +189,7 @@
 
     <details class="card"><summary>Accounts</summary><div id="accounts"></div></details>
     <details class="card" id="picnic-card"><summary>Winkel en Picnic</summary><div id="picnic"></div></details>
+    <details class="card"><summary>Albert Heijn</summary><div id="ah"></div></details>
     <details class="card"><summary>AI-aanbieder</summary><div id="ai"></div></details>
     <details class="card"><summary>Telegram-meldingen</summary><div id="telegram"></div></details>
     <details class="card"><summary>Claude, ChatGPT en Home Assistant</summary><div id="integrations"></div></details>
@@ -166,12 +197,11 @@
   </section>
 </main>
 
-<nav class="tabs" id="tabs">
+<nav class="tabs" id="tabs" aria-label="Hoofdmenu">
   <button data-tab="week" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Week</button>
   <button data-tab="cart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 4h2l2.4 11h10.2L20 8H6.2"/><circle cx="9" cy="19.5" r="1.5"/><circle cx="17" cy="19.5" r="1.5"/></svg>Mand</button>
   <button data-tab="pantry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="2.5" width="14" height="19" rx="2"/><path d="M5 10h14M8.5 6v1.5M8.5 13v2"/></svg>Voorraad</button>
-  <button data-tab="recipes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 3v8a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2V3M8 13v8M17 21V3c-2 1-3 4-3 7s1 3 3 3"/></svg>Recepten</button>
-  <button data-tab="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 5h16v11H9l-5 4z"/></svg>Chat</button>
+  <button data-tab="budget"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v3"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M16 14h.01"/></svg>Budget</button>
   <button data-tab="more"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>Meer</button>
 </nav>
 <div id="login" hidden></div>

@@ -88,7 +88,7 @@ test('historie: voltooide leveringen van de laatste twaalf weken, zonder dubbele
   const summary = { delivery_id: 'delivery1', status: 'COMPLETED', slot: { window_start: '2026-11-01T23:30:00Z' } };
   const raw = { ...summary, orders: [
     { id: 'order1', status: 'COMPLETED', creation_time: '2026-10-31T20:00:00Z', checkout_total_price: 774,
-      items: [{ id: 'line1', items: [{ id: 's123', name: 'Halfvolle melk', unit_quantity: '1 liter' }], decorators: [{ type: 'QUANTITY', quantity: 6 }] }] },
+      items: [{ id: 'line1', items: [{ id: 's123', name: 'Halfvolle melk', unit_quantity: '1 liter' }], display_price: 774, decorators: [{ type: 'QUANTITY', quantity: 6 }] }] },
     { id: 'order2', status: 'CANCELLED', creation_time: '2026-10-31T21:00:00Z', items: [] },
   ] };
   t.mock.method(globalThis, 'fetch', async (url: string) => {
@@ -98,7 +98,7 @@ test('historie: voltooide leveringen van de laatste twaalf weken, zonder dubbele
   });
   const client = new PicnicClient({ countryCode: 'NL', authKey: 'synthetic' });
   const history = await importDeliveries(client.delivery, Date.parse('2026-11-07T12:00:00Z'));
-  assert.deepEqual(history.deliveries, [{ id: 'delivery1', date: '2026-11-02', totalCents: 774, orders: [{ id: 'order1', orderedAt: '2026-10-31T20:00:00Z', items: [{ productId: 's123', name: 'Halfvolle melk', pack: '1 liter', quantity: 6 }] }] }]);
+  assert.deepEqual(history.deliveries, [{ id: 'delivery1', date: '2026-11-02', totalCents: 774, paidCents: 774, orders: [{ id: 'order1', orderedAt: '2026-10-31T20:00:00Z', items: [{ productId: 's123', name: 'Halfvolle melk', pack: '1 liter', quantity: 6, cents: 774 }] }] }]);
 });
 
 test('mandwijziging: afgebroken synchronisatie hervat zonder dubbel toevoegen', async () => {

@@ -19,6 +19,13 @@ export type ToolSpec = { name: string; description: string; input: Record<string
 export type ToolCall = { id: string; name: string; input: unknown };
 export type Turn = { role: 'user' | 'assistant'; content: string };
 export type Runner = (call: ToolCall) => Promise<{ content: string; isError: boolean }>;
+/** Een foto bij het bericht (base64, zonder data:-voorvoegsel). */
+export type ImageInput = { mediaType: 'image/jpeg' | 'image/png' | 'image/webp'; data: string };
+/**
+ * maxTokens: ruimte voor het antwoord (lange lijsten in één toolaanroep hebben meer nodig);
+ * images: foto's bij het bericht; model: ander model van dezelfde aanbieder (bijv. eentje dat foto's leest).
+ */
+type ConverseInput = { system: string; context: string; history: Turn[]; message: string; tools: ToolSpec[]; run: Runner; maxSteps?: number; maxTokens?: number; images?: ImageInput[]; model?: string };
 
 export const modelOf = (c: AIConfig) => c.model?.trim() || providers[c.provider].model;
 export const labelOf = (c: AIConfig) => providers[c.provider].label;
@@ -35,25 +42,32 @@ function apiProblem(status: number | undefined, label: string): Problem {
  * tekst; `context` is wisselende informatie (datum, huishouden) die bij het nieuwe bericht hoort,
  * zodat systeemprompt en tools gelijk blijven en gecachet kunnen worden.
  */
-export async function converse(config: AIConfig, input: { system: string; context: string; history: Turn[]; message: string; tools: ToolSpec[]; run: Runner; maxSteps?: number }): Promise<string> {
+export async function converse(config: AIConfig, input: ConverseInput): Promise<string> {
   return config.provider === 'claude' ? claude(config, input) : openaiCompatible(config, input);
 }
+
+/** Aanbieders die foto's kunnen lezen, met een model dat dat zeker kan (als het gekozen model het niet kan). */
+export const visionModels: Partial<Record<Provider, string>> = { claude: '', openai: 'gpt-4.1-mini', mistral: 'mistral-medium-latest', local: '' };
 
 // ───────────── Claude (Anthropic SDK) ─────────────
 
 let sdk: Promise<typeof import('@anthropic-ai/sdk')> | null = null;
 
-async function claude(config: AIConfig, input: Parameters<typeof converse>[1]): Promise<string> {
+async function claude(config: AIConfig, input: ConverseInput): Promise<string> {
   sdk ??= import('@anthropic-ai/sdk');
   const { default: Anthropic } = await sdk;
   const client = new Anthropic({ apiKey: config.key, maxRetries: 1, timeout: 90_000 });
-  const model = modelOf(config);
+  const model = input.model || modelOf(config);
   const current = /^claude-(opus|sonnet|fable|haiku)-5/.test(model);
   // Server-side fallback bij een weigering, voor de modellen die dat ondersteunen.
   const fallback = /^claude-(opus-5-5|opus-5|fable-5-1|sonnet-5-5)$/.test(model);
   const messages: any[] = [
     ...input.history.map(t => ({ role: t.role, content: t.content })),
-    { role: 'user', content: [{ type: 'text', text: input.context }, { type: 'text', text: input.message }] },
+    { role: 'user', content: [
+      { type: 'text', text: input.context },
+      ...(input.images ?? []).map(i => ({ type: 'image', source: { type: 'base64', media_type: i.mediaType, data: i.data } })),
+      { type: 'text', text: input.message },
+    ] },
   ];
   const tools = input.tools.map(t => ({ name: t.name, description: t.description, input_schema: t.input }));
   let text = '';
@@ -89,7 +103,7 @@ async function claude(config: AIConfig, input: Parameters<typeof converse>[1]): 
 
 // ───────────── OpenAI-compatibele aanbieders ─────────────
 
-async function openaiCompatible(config: AIConfig, input: Parameters<typeof converse>[1]): Promise<string> {
+async function openaiCompatible(config: AIConfig, input: ConverseInput): Promise<string> {
   const label = labelOf(config);
   const url = config.provider === 'local'
     ? (config.baseUrl || 'http://127.0.0.1:11434/v1').replace(/\/$/, '') + '/chat/completions'
@@ -97,7 +111,11 @@ async function openaiCompatible(config: AIConfig, input: Parameters<typeof conve
   const messages: any[] = [
     { role: 'system', content: input.system + '\n\n' + input.context },
     ...input.history.map(t => ({ role: t.role, content: t.content })),
-    { role: 'user', content: input.message },
+    { role: 'user', content: input.images?.length ? [
+      { type: 'text', text: input.message },
+      // Mistral wil de afbeelding als tekenreeks, OpenAI als object.
+      ...input.images.map(i => ({ type: 'image_url', image_url: config.provider === 'mistral' ? `data:${i.mediaType};base64,${i.data}` : { url: `data:${i.mediaType};base64,${i.data}` } })),
+    ] : input.message },
   ];
   const tools = input.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input } }));
   let text = '';
@@ -105,10 +123,10 @@ async function openaiCompatible(config: AIConfig, input: Parameters<typeof conve
     let response: Response;
     try {
       response = await fetch(url, {
-        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(config.provider === 'local' ? 180_000 : 60_000),
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(config.provider === 'local' ? 180_000 : input.images?.length ? 120_000 : 60_000),
         headers: { 'Content-Type': 'application/json', ...(config.key ? { Authorization: 'Bearer ' + config.key } : {}) },
         body: JSON.stringify({
-          model: modelOf(config), messages, max_tokens: 1500, ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
+          model: input.model || modelOf(config), messages, max_tokens: input.maxTokens ?? 1500, ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
           ...(config.provider === 'deepseek' ? { thinking: { type: 'disabled' } } : {}),
         }),
       });
