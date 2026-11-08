@@ -10,6 +10,10 @@ const dayShort = date => new Intl.DateTimeFormat('nl-NL', { weekday: 'short', ti
 
 let S = null;
 let plan = null;
+/** Het voorstel klopt niet meer helemaal: blijft staan tot het nieuwe er is (geen "laden…"). */
+let planStale = false;
+let planSeq = 0;
+let planWrites = 0;
 let busy = false;
 let chatLoaded = false;
 
@@ -31,6 +35,7 @@ const btn = (label, onclick, cls = '') => el('button', { type: 'button', class: 
 /** Vervang de inhoud van een element; lege waarden (null, false) worden overgeslagen. */
 /** Eén iconenset (24px, lijn 1,75), in plaats van tekens of emoji. */
 const ICONS = {
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   minus: '<path d="M5 12h14"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -38,6 +43,8 @@ const ICONS = {
   down: '<g transform="rotate(180 12 12)"><path d="M7 10v10H4V10h3Zm0 0 4.2-6.3c.9-.3 2.2.3 2.1 1.6L12.8 9H18a2 2 0 0 1 2 2.3l-1.2 6.9A2 2 0 0 1 16.8 20H7"/></g>',
   scan: '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M8 8v8M11 8v8M14 8v8M17 8v8"/>',
   swipe: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M4 12h16"/>',
+  left: '<path d="M15 5l-7 7 7 7"/>',
+  right: '<path d="M9 5l7 7-7 7"/>',
   truck: '<path d="M3 7h11v9H3zM14 10h3.5l3.5 3.5V16h-7"/><circle cx="7" cy="17.5" r="1.6"/><circle cx="17.5" cy="17.5" r="1.6"/>',
 };
 function icon(name) {
@@ -50,6 +57,41 @@ function icon(name) {
 }
 const iconBtn = (name, label, onclick, cls = '') => el('button', { type: 'button', class: 'icon-btn ' + cls, onclick, 'aria-label': label, title: label }, icon(name));
 const put = (node, ...kids) => node.replaceChildren(...kids.flat().filter(k => k !== null && k !== undefined && k !== false));
+
+// ───────────── Direct zoeken in lijsten ─────────────
+
+const listQueries = {};
+const fold = text => text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+/** Zoekveld boven een lijst; filtert terwijl je typt en onthoudt de zoekterm als de lijst opnieuw getekend wordt. */
+function searchBox(id, label) {
+  const input = el('input', { type: 'search', placeholder: label, 'aria-label': label, 'aria-controls': id, value: listQueries[id] ?? '' });
+  input.oninput = () => { listQueries[id] = input.value; applyListSearch(id); };
+  return el('label', { class: 'list-search', 'data-search-box': id }, icon('search'), input);
+}
+
+/** Verberg de regels van een lijst die niet bij de zoekterm passen. Bij korte lijsten blijft het zoekveld weg. */
+function applyListSearch(id) {
+  const list = document.getElementById(id);
+  const box = document.querySelector(`[data-search-box="${id}"]`);
+  if (!list) return;
+  const query = fold((listQueries[id] ?? '').trim());
+  const rows = [...list.children].filter(row => !row.matches('p, .search-empty'));
+  let shown = 0;
+  for (const row of rows) {
+    const hit = !query || fold(row.textContent).includes(query);
+    row.hidden = !hit;
+    if (hit) shown++;
+  }
+  list.querySelector(':scope > .search-empty')?.remove();
+  if (query && !shown) list.append(el('p', { class: 'hint search-empty' }, `Niets gevonden voor "${listQueries[id].trim()}".`));
+  if (box) box.hidden = rows.length < 5 && !query;
+}
+
+// Vaste lijsten krijgen hun zoekveld één keer; de lijst van het voorstel maakt renderPlan zelf.
+for (const [id, label] of [['pantry-menu', 'Zoek in het menu'], ['pantry-other', 'Zoek in je voorraad'], ['cart-lines', 'Zoek in je Picnic-mand']]) {
+  document.getElementById(id).before(searchBox(id, label));
+}
 
 async function api(path, data) {
   const response = await fetch(path.startsWith('/') ? path : '/api/ui/' + path, data === undefined ? {} : {
@@ -100,24 +142,60 @@ const ingredientName = key => S?.ingredients.find(i => i.key === key)?.name ?? k
 
 // ───────────── Tabs ─────────────
 
+/** Recepten hoort bij Week (schakelaar bovenaan); Chat zit rechtsboven en heeft geen tab. */
+const navTab = name => name === 'recipes' ? 'week' : name === 'chat' ? null : name;
+
 function showTab(name) {
-  for (const b of $('tabs').querySelectorAll('button')) b.classList.toggle('active', b.dataset.tab === name);
+  for (const b of $('tabs').querySelectorAll('button')) {
+    const on = b.dataset.tab === navTab(name);
+    b.classList.toggle('active', on);
+    if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  }
+  $('chat-button').classList.toggle('active', name === 'chat');
+  if (name === 'chat') { $('chat-button').setAttribute('aria-current', 'page'); markNoticesSeen(); } else $('chat-button').removeAttribute('aria-current');
   for (const s of document.querySelectorAll('.tab')) s.classList.toggle('active', s.id === 'tab-' + name);
   history.replaceState(null, '', '#' + name);
   window.scrollTo({ top: 0 });
   if (name === 'chat' && !chatLoaded) loadChat();
-  if (name === 'cart' && !plan && S?.shop.ready) run(calculate, { reload: false });
+  if (name === 'cart' && S?.shop.ready) { if (!plan) run(calculate, { reload: false }); else if (planStale) scheduleCalc(); }
+  if (name === 'pantry') loadPlanQuietly();
+  if (name === 'budget') loadBudget();
 }
 $('tabs').onclick = e => { const b = e.target.closest('button'); if (b) showTab(b.dataset.tab); };
+$('chat-button').onclick = () => showTab('chat');
+
+// Terug in de app na een tijdje (bijv. na een wijziging via Telegram): de stand en de mand opnieuw ophalen.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !S || busy || Date.now() - lastLoad < 30_000) return;
+  planStale = true;
+  load().then(() => { if ($('tab-budget').classList.contains('active')) loadBudget(); }).catch(() => {});
+});
+
+// Het puntje op de chatknop: alleen voor meldingen die nieuwer zijn dan je laatste bezoek aan de chat.
+const SEEN_KEY = 'weekmand-meldingen-gezien';
+function noticesSeen() { try { return localStorage.getItem(SEEN_KEY) ?? ''; } catch { return ''; } }
+function markNoticesSeen() {
+  const newest = S?.notices?.[0]?.at;
+  if (newest) { try { localStorage.setItem(SEEN_KEY, newest); } catch { /* privévenster */ } }
+  renderUnread();
+}
+function renderUnread() {
+  const newest = S?.notices?.[0]?.at ?? '';
+  const unread = !!newest && newest > noticesSeen() && !$('tab-chat').classList.contains('active');
+  $('chat-unread').hidden = !unread;
+  $('chat-button').setAttribute('aria-label', unread ? 'Chat, nieuwe melding' : 'Chat');
+}
 window.addEventListener('hashchange', () => {
   const tab = location.hash.slice(1);
-  if (['week', 'cart', 'pantry', 'recipes', 'chat', 'more'].includes(tab) && !$('tab-' + tab).classList.contains('active')) showTab(tab);
+  if (['week', 'cart', 'pantry', 'budget', 'recipes', 'chat', 'more'].includes(tab) && !$('tab-' + tab).classList.contains('active')) showTab(tab);
 });
 
 // ───────────── Laden en tekenen ─────────────
 
+let lastLoad = 0;
 async function load() {
   S = await api('/api/state');
+  lastLoad = Date.now();
   renderHeader();
   renderWeek();
   renderCart();
@@ -136,8 +214,7 @@ function renderHeader() {
     $('deadline').classList.toggle('urgent', d.hoursLeft < 6);
   }
   $('version').textContent = 'Weekmand ' + S.version;
-  const dot = $('tabs').querySelector('[data-tab="chat"] .dot');
-  if (S.notices.length && !dot) $('tabs').querySelector('[data-tab="chat"]').append(el('span', { class: 'dot' }));
+  renderUnread();
 }
 
 function renderWeek() {
@@ -153,7 +230,7 @@ function renderWeek() {
   const before = S.menu.days.filter(day => day.meal && day.date < S.menu.window.start);
   if (before.length) notices.push(el('div', { class: 'notice' },
     el('p', {}, `${before.length} maaltijd${before.length === 1 ? '' : 'en'} ${before.length === 1 ? 'valt' : 'vallen'} vóór de bezorging van ${fmtDate(S.menu.window.start)}.`),
-    btn('Verplaats naar de bezorgperiode', () => run(async () => { const r = await api('menu/shift', {}); toast(`${r.moved} maaltijden verplaatst.`); plan = null; }), 'primary small')));
+    btn('Verplaats naar de bezorgperiode', () => run(async () => { const r = await api('menu/shift', {}); toast(`${r.moved} maaltijden verplaatst.`); planStale = true; }), 'primary small')));
   put($('suggestions'), notices);
 
   // Bezorging: het hoofdblok van het scherm.
@@ -191,19 +268,51 @@ function renderWeek() {
   }
   if (!marked) items.push(marker());
   put($('days'), items);
+  renderPickBar();
   $('approve-menu').hidden = !S.menu.days.some(day => day.meal?.status === 'proposed');
 }
+
+// Gerechten aanvinken om te vervangen, eventueel met een opmerking.
+const picked = new Set();
+function renderPickBar() {
+  for (const date of [...picked]) if (!S.menu.days.some(d => d.date === date && d.meal)) picked.delete(date);
+  const n = picked.size;
+  $('pick-bar').hidden = !n;
+  $('tab-week').classList.toggle('picking', !!n);
+  if (!n) return;
+  $('pick-count').textContent = `${n} ${n === 1 ? 'gerecht' : 'gerechten'} aangevinkt`;
+  $('pick-hint').textContent = S.ai
+    ? 'Met een opmerking past de AI het recept daarop aan. Leeg: Weekmand kiest een ander gerecht.'
+    : 'Weekmand kiest een ander gerecht; je opmerking geldt als wens.';
+  $('pick-replace').textContent = n === 1 ? 'Vervangen' : `Vervang ${n} gerechten`;
+}
+$('pick-bar').onsubmit = e => {
+  e.preventDefault();
+  const note = $('pick-note').value.trim();
+  run(async () => {
+    if (note && S.ai) toast('Recept aanpassen… dit duurt even.');
+    const r = await api('meal/replace', { dates: [...picked], note });
+    picked.clear();
+    $('pick-note').value = '';
+    planStale = true;
+    toast(r.replaced.map(x => `${x.day}: ${x.to}`).join(' · '));
+  });
+};
+$('pick-cancel').onclick = () => { picked.clear(); $('pick-note').value = ''; renderWeek(); };
 
 function dayRow(day, portions) {
   const m = day.meal;
   const [, , dd] = day.date.split('-');
   const servings = m?.servings ?? portions;
   const setServings = delta => run(() => api('meal/set', { date: day.date, recipeId: m.id, servings: Math.max(1, Math.round((servings + delta) * 100) / 100) }));
-  return el('li', { class: 'day' + (day.inOrder ? '' : ' out') + (m ? '' : ' empty') },
+  const toggle = e => { if (e.target.checked) picked.add(day.date); else picked.delete(day.date); e.target.closest('.day').classList.toggle('picked', e.target.checked); renderPickBar(); };
+  return el('li', { class: 'day' + (day.inOrder ? '' : ' out') + (m ? '' : ' empty') + (m && picked.has(day.date) ? ' picked' : '') },
     el('div', { class: 'day-date' }, el('span', { class: 'dow' }, day.day.slice(0, 2)), el('span', { class: 'dom' }, Number(dd))),
     el('div', { class: 'day-body' },
       m ? [
         el('div', { class: 'dish' },
+          el('label', { class: 'pick', title: 'Aanvinken om te vervangen' },
+            el('input', { type: 'checkbox', checked: picked.has(day.date) || undefined, 'aria-label': `${m.name} aanvinken om te vervangen`, onchange: toggle })),
           el('button', { type: 'button', class: 'dish-name', onclick: () => showRecipe(m.id, servings) }, m.name),
           m.status === 'proposed' ? el('span', { class: 'pill proposed' }, 'voorstel') : null),
         el('p', { class: 'day-meta' }, `${m.minutes} min · ${m.tags.filter(t => !['favoriet', 'picnic', 'bewaard', 'besteld'].includes(t)).slice(0, 3).join(', ')}${m.note ? ' · ' + m.note : ''}`),
@@ -233,7 +342,7 @@ function chooseDelivery() {
   const pick = data => { closeDialog(); run(async () => {
     const r = await api('delivery', data);
     toast(r.warning ?? r.note ?? `Bezorging ${fmtDate(r.planned)} gekozen.`, !!r.warning);
-    plan = null;
+    planStale = true;
   }); };
   const dateInput = el('input', { type: 'date', min: local(Date.now() + 86400000), value: d.planned ?? '' });
   dialog('Bezorgmoment', el('div', { class: 'stack' },
@@ -246,7 +355,7 @@ function chooseDelivery() {
     el('h3', {}, 'Later dan deze lijst?'),
     el('form', { class: 'row', onsubmit: e => { e.preventDefault(); if (dateInput.value) pick({ date: dateInput.value }); } },
       el('span', { class: 'grow' }, dateInput), el('button', {}, 'Alleen datum kiezen')),
-    d.planned ? btn('Weer het moment uit Picnic volgen', () => { closeDialog(); run(async () => { await api('delivery/reset', {}); plan = null; }); }, 'ghost') : null));
+    d.planned ? btn('Weer het moment uit Picnic volgen', () => { closeDialog(); run(async () => { await api('delivery/reset', {}); planStale = true; }); }, 'ghost') : null));
 }
 
 const fmtDate = date => date ? dateFmt.format(new Date(date + 'T12:00:00')) : '';
@@ -284,10 +393,10 @@ async function pickRecipe(date, servings) {
 
 $('propose-form').onsubmit = e => {
   e.preventDefault();
-  run(async () => { await api('menu/propose', { wish: $('wish').value, replace: $('replace').checked }); plan = null; toast('Nieuw voorstel klaar.'); });
+  run(async () => { await api('menu/propose', { wish: $('wish').value, replace: $('replace').checked }); planStale = true; toast('Nieuw voorstel klaar.'); });
 };
 $('approve-menu').onclick = () => run(async () => { const r = await api('menu/approve', {}); toast(`${r.approved} maaltijden goedgekeurd.`); });
-$('to-cart').onclick = () => { plan = null; showTab('cart'); };
+$('to-cart').onclick = () => { planStale = true; showTab('cart'); };
 
 // ───────────── Mand ─────────────
 
@@ -296,10 +405,50 @@ let calcTimer;
 function scheduleCalc() {
   clearTimeout(calcTimer);
   calcTimer = setTimeout(() => {
-    if (plan || !S?.shop.ready || !$('tab-cart').classList.contains('active')) return;
+    if ((plan && !planStale) || !S?.shop.ready || !$('tab-cart').classList.contains('active')) return;
+    // Bijwerken gebeurt stil: het oude voorstel blijft staan en knoppen blijven bruikbaar.
+    if (plan) return calculate(false, { quiet: true }).catch(e => toast(e.message, true));
     if (busy) return scheduleCalc();
     run(calculate, { reload: false });
-  }, 300);
+  }, plan ? 50 : 300);
+}
+
+// Productfoto's komen rechtstreeks van Picnic (openbaar); de CSP in server.ts staat deze bron toe.
+const PICNIC_IMAGES = 'https://storefront-prod.nl.picnicinternational.com/static/images/';
+function productPhoto(image, size = 'small', cls = 'thumb') {
+  const none = () => el('span', { class: cls + ' none', 'aria-hidden': 'true' });
+  if (!image) return none();
+  const img = el('img', { class: cls, src: `${PICNIC_IMAGES}${encodeURIComponent(image)}/${size}.png`, alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer' });
+  img.addEventListener('error', () => img.replaceWith(none()), { once: true });
+  return img;
+}
+
+/**
+ * Productvenster: grote foto, maat, prijs en wat Picnic over het product zegt, om te zien of het het
+ * juiste product is (spuitbus of bekertje). Bij een product van Weekmand: een ander product kiezen.
+ */
+let productToken = null;
+function productDialog(p) {
+  const token = productToken = {};
+  const photo = el('div', { class: 'product-photo' }, productPhoto(p.image, 'large', 'photo'));
+  const facts = el('p', { class: 'muted' }, [p.unitQuantity, p.cents ? money(p.cents) + ' per stuk' : null, p.unitPrice].filter(Boolean).join(' · '));
+  const brand = el('p', { class: 'small muted' });
+  const about = el('p', { class: 'product-about small' });
+  const tags = el('div', { class: 'row' });
+  const choose = key => el('div', { class: 'stack' },
+    el('p', { class: 'hint' }, `Weekmand koopt dit voor ${ingredientName(key)}. Klopt het niet? Kies een ander product; bij de volgende berekening wisselt Weekmand het om in je mand.`),
+    btn('Ander product kiezen', () => linkDialog(key), 'secondary'));
+  const link = el('div', {}, p.key ? choose(p.key) : null);
+  dialog(p.name, el('div', { class: 'stack product-sheet' }, photo, facts, p.context ? el('p', { class: 'small' }, p.context) : null, brand, about, tags, link));
+  api('product', { id: p.id }).then(d => {
+    if (token !== productToken || !$('dialog').open) return;
+    if (!p.image && d.image) put(photo, productPhoto(d.image, 'large', 'photo'));
+    if (d.brand) brand.textContent = d.brand;
+    if (d.description) about.textContent = d.description;
+    if (!p.unitPrice && d.unitPrice) facts.textContent = [facts.textContent, d.unitPrice].filter(Boolean).join(' · ');
+    put(tags, ...(d.labels ?? []).map(t => el('span', { class: 'tag' }, t)));
+    if (!p.key && d.key) put(link, choose(d.key));
+  }).catch(() => {});
 }
 
 /** De echte Picnic-mand, altijd zichtbaar. */
@@ -308,12 +457,21 @@ async function loadCartLines() {
   try {
     const cart = await api('cart', {});
     const mine = cart.lines.reduce((n, l) => n + (l.byWeekmand ? 1 : 0), 0);
+    const photos = cart.lines.some(l => l.image);
     put($('cart-lines'),
       el('p', {}, el('b', {}, `${cart.lines.reduce((n, l) => n + l.quantity, 0)} producten · ${money(cart.totalCents)}`),
         el('span', { class: 'muted small' }, mine ? ` · ${mine} regels door Weekmand toegevoegd` : '')),
-      ...cart.lines.map(l => el('div', { class: 'pantry-item' }, el('span', { class: 'grow' }, `${l.quantity}× ${l.name}`, el('span', { class: 'muted small' }, ` · ${l.unitQuantity}`)),
-        l.byWeekmand ? el('span', { class: 'pill' }, l.byWeekmand === l.quantity ? 'Weekmand' : `${l.byWeekmand} door Weekmand`) : el('span', { class: 'pill' }, 'zelf'))),
+      ...cart.lines.map(l => {
+        const who = l.byWeekmand ? (l.byWeekmand === l.quantity ? 'Weekmand' : `${l.byWeekmand} door Weekmand`) : 'zelf';
+        const context = `${l.quantity}× in je Picnic-mand · ${l.byWeekmand ? (l.byWeekmand === l.quantity ? 'door Weekmand' : `${l.byWeekmand} door Weekmand`) : 'zelf toegevoegd'}`;
+        return el('button', { type: 'button', class: 'product-row', 'aria-label': `${l.quantity}× ${l.name}, ${l.unitQuantity}: bekijk het product`, onclick: () => productDialog({ ...l, context }) },
+          photos ? productPhoto(l.image) : null,
+          el('span', { class: 'grow' }, el('span', { class: 'product-name' }, `${l.quantity}× ${l.name}`),
+            el('span', { class: 'muted small' }, [l.unitQuantity, l.unitPrice].filter(Boolean).join(' · '))),
+          el('span', { class: 'pill' }, who));
+      }),
       !cart.lines.length ? el('p', { class: 'muted small' }, 'Je Picnic-mand is leeg.') : null);
+    applyListSearch('cart-lines');
   } catch (e) { put($('cart-lines'), el('p', { class: 'warn small' }, e.message)); }
 }
 
@@ -357,14 +515,43 @@ function swipeable(node, onSwipe) {
   return node;
 }
 
-/** force: echt opnieuw berekenen; anders het gedeelde overzicht van de server (snel). */
-async function calculate(force = false) {
-  const slow = setTimeout(() => toast('Bezig met berekenen… Nieuwe producten koppelen bij Picnic kan even duren.'), 1500);
+/**
+ * force: de Picnic-mand opnieuw lezen en alles opnieuw berekenen. Anders het gedeelde overzicht van
+ * de server; na een wijziging in Weekmand zelf rekent die met de al gelezen mand (snel, geen Picnic).
+ */
+async function calculate(force = false, { quiet = false } = {}) {
+  const seq = ++planSeq;
+  const slow = quiet ? null : setTimeout(() => toast('Bezig met berekenen… Nieuwe producten koppelen bij Picnic kan even duren.'), 1500);
   const result = await api(force === true ? 'plan' : 'plan/current', {}).finally(() => clearTimeout(slow));
+  // Een nieuwere berekening of een nog lopende wijziging wint; die tekent zelf.
+  if (seq !== planSeq || planWrites) return;
   plan = result.plan;
+  planStale = false;
   renderPlan();
   loadCartLines();
+  renderPantry(); // wat in de mand ligt telt mee in de voorraad
 }
+
+/** Een regel meteen uit het voorstel halen of terugzetten; de server rekent daarna stil na. */
+async function changePlanLine(path, productId, update, message) {
+  if (plan) plan = { ...plan, lines: plan.lines.map(l => l.productId === productId ? { ...l, ...update } : l) };
+  planStale = true;
+  planWrites++;
+  renderPlan();
+  try {
+    await api(path, { productId });
+    if (message) toast(message);
+  } catch (e) { toast(e.message, true); }
+  finally { planWrites--; }
+  if (!planWrites) await calculate(false, { quiet: true }).catch(e => toast(e.message, true));
+}
+
+/** Voorraad: de mand op de achtergrond laden, zodat "in je mand" klopt zonder eerst de Mand-tab te openen. */
+function loadPlanQuietly() {
+  if ((plan && !planStale) || !S?.shop.ready || planLoading) return;
+  planLoading = calculate(false, { quiet: true }).catch(() => {}).finally(() => { planLoading = null; });
+}
+let planLoading = null;
 
 function renderCart() {
   const status = $('cart-status');
@@ -383,19 +570,19 @@ function renderCart() {
   put($('extras'), 
     ...extras.map(x => el('div', { class: 'pantry-item' },
       el('span', { class: 'grow' }, x.kind === 'product' ? `${x.quantity}× ${x.name}` : x.label),
-      iconBtn('x', 'Van de lijst halen', () => run(async () => { await api('order/remove-extra', { id: x.id }); plan = null; }), 'danger'))),
+      iconBtn('x', 'Van de lijst halen', () => run(async () => { await api('order/remove-extra', { id: x.id }); planStale = true; }), 'danger'))),
     ...skipped.map(key => el('div', { class: 'pantry-item' },
       el('span', { class: 'grow muted' }, 'Overgeslagen: ' + (S.regulars.find(r => r.productId === key)?.name ?? ingredientName(key))),
-      btn('Toch kopen', () => run(async () => { await api('order/undo-skip', { key }); plan = null; }), 'small'))),
+      btn('Toch kopen', () => run(async () => { await api('order/undo-skip', { key }); planStale = true; }), 'small'))),
     !extras.length && !skipped.length ? el('p', { class: 'muted small' }, 'Niets extra deze keer.') : null);
 
   put($('regulars'), ...S.regulars.map(r => el('div', { class: 'pantry-item' },
-    el('input', { type: 'checkbox', checked: r.enabled || undefined, 'aria-label': 'Vast ' + r.name, onchange: e => run(async () => { await api('regular', { productId: r.productId, enabled: e.target.checked }); plan = null; }) }),
+    el('input', { type: 'checkbox', checked: r.enabled || undefined, 'aria-label': 'Vast ' + r.name, onchange: e => run(async () => { await api('regular', { productId: r.productId, enabled: e.target.checked }); planStale = true; }) }),
     el('span', { class: 'grow' }, `${r.name}`, el('span', { class: 'muted small' }, ` · ${r.unitQuantity}${r.weeks && !r.enabled ? ` · voorstel: ${r.weeks} weken gekocht` : ''}`)),
     el('span', { class: 'stepper' },
-      iconBtn('minus', 'Minder', () => run(async () => { await api('regular', { productId: r.productId, quantity: r.quantity - 1 }); plan = null; })),
+      iconBtn('minus', 'Minder', () => run(async () => { await api('regular', { productId: r.productId, quantity: r.quantity - 1 }); planStale = true; })),
       el('span', {}, `${r.quantity}×`),
-      iconBtn('plus', 'Meer', () => run(async () => { await api('regular', { productId: r.productId, quantity: r.quantity + 1 }); plan = null; }))))));
+      iconBtn('plus', 'Meer', () => run(async () => { await api('regular', { productId: r.productId, quantity: r.quantity + 1 }); planStale = true; }))))));
   if (!S.regulars.length) $('regulars').append(el('p', { class: 'muted small' }, 'Nog geen vaste boodschappen.'));
 
   $('demo-card').hidden = S.shop.mode !== 'mock';
@@ -425,12 +612,15 @@ function renderPlan() {
     el('h3', {}, changes.length ? `${changes.length} ${changes.length === 1 ? 'wijziging' : 'wijzigingen'} voorgesteld` : 'Je Picnic-mand is compleet'),
     el('p', { class: 'muted small' }, changes.length ? 'Nog niet doorgevoerd. Alleen deze verschillen gaan naar Picnic; wat je zelf in Picnic zet blijft staan.' : 'Alles wat nodig is zit al in je Picnic-mand. Afrekenen doe je in de Picnic-app.'),
     el('p', { class: 'muted small' }, `Voor ${plan.meals.length} maaltijden: ${plan.meals.map(m => m.name).join(', ') || 'geen'}.`),
-    el('div', { class: 'row' }, el('span', { class: 'muted small grow' }, `Berekend om ${timeFmt.format(new Date(plan.computedAt))} · voor het hele huishouden`),
+    el('div', { class: 'row' }, el('span', { class: 'muted small grow' }, planStale ? 'Bijwerken…' : `Picnic-mand gelezen om ${timeFmt.format(new Date(plan.cartReadAt ?? plan.computedAt))} · voor het hele huishouden`),
       btn('Opnieuw berekenen', () => run(() => calculate(true), { reload: false }), 'small ghost')),
     changes.length ? el('p', { class: 'hint with-icon' }, icon('swipe'), 'Veeg een regel opzij om hem deze keer over te slaan.') : null,
-    ...changes.map(l => swipeable(el('div', { class: 'line' },
+    changes.length ? searchBox('plan-lines', 'Zoek in het voorstel') : null,
+    el('div', { id: 'plan-lines' }, ...changes.map(l => swipeable(el('div', { class: 'line' },
       el('span', { class: 'qty ' + (l.add ? 'add' : 'remove') }, l.add ? '+' + l.add : '−' + l.remove),
-      el('div', {}, el('div', {}, l.product, el('span', { class: 'muted small' }, ' · ' + l.unitQuantity)),
+      el('div', {}, el('div', {},
+        el('button', { type: 'button', class: 'product-link', onclick: () => productDialog({ id: l.productId, name: l.product, unitQuantity: l.unitQuantity, cents: l.cents, image: l.image, key: l.key, context: l.add ? `Weekmand zet er ${l.add} bij.` : `Weekmand haalt er ${l.remove} uit.` }) }, l.product),
+        el('span', { class: 'muted small' }, ' · ' + l.unitQuantity)),
         el('div', { class: 'why' }, l.reason),
         l.need !== undefined ? el('div', { class: 'why' }, [
           'nodig ' + amountText(l.need, l.unit),
@@ -438,20 +628,59 @@ function renderPlan() {
           l.stock !== null && l.stock !== undefined ? 'voorraad ' + amountText(l.stock, l.unit) : null,
         ].filter(Boolean).join(' · ')) : null),
       el('span', { class: 'small' }, l.cents ? money(l.cents * (l.add || l.remove)) : 'prijs onbekend')),
-    () => run(async () => { await api('plan/decline', { productId: l.productId }); toast(`${l.product} overgeslagen voor deze bestelling.`); plan = null; }))),
+    () => changePlanLine('plan/decline', l.productId, { add: 0, remove: 0, declined: true }, `${l.product} overgeslagen voor deze bestelling.`)))),
     ...plan.lines.filter(l => l.declined).map(l => el('div', { class: 'pantry-item' },
       el('span', { class: 'grow muted small' }, 'Overgeslagen: ' + l.product),
-      btn('Ongedaan maken', () => run(async () => { await api('plan/undecline', { productId: l.productId }); plan = null; }), 'small'))),
+      btn('Ongedaan maken', () => changePlanLine('plan/undecline', l.productId, { declined: false }), 'small'))),
     el('p', { class: over ? 'warn' : '' }, `Mand daarna ${money(plan.totalCents)} van ${money(plan.budgetCents)} budget${over ? ' — boven budget' : ''}`),
-    el('div', { class: 'budget' + (over ? ' over' : '') }, el('div', { style: `width:${Math.min(100, plan.totalCents / plan.budgetCents * 100)}%` })),
+    el('div', { class: 'budget' + (over ? ' over' : '') }, budgetFill(Math.min(100, plan.totalCents / plan.budgetCents * 100))),
     plan.lines.length > changes.length ? el('p', { class: 'muted small' }, `${plan.lines.length - changes.length} regels staan al goed in de mand.`) : null,
     ...plan.missing.map(m => el('div', { class: 'pantry-item' }, el('span', { class: 'grow warn small' }, `${m.name}: geen product gekoppeld`), btn('Koppel', () => linkDialog(m.key), 'small'))),
-    changes.length ? btn(`Wijzigingen naar Picnic sturen (${changes.length})`, () => run(async () => {
+    changes.length ? btn(`Wijzigingen naar Picnic sturen (${changes.length})`, () => planStale ? toast('Even wachten: het voorstel wordt bijgewerkt.') : run(async () => {
       const r = await api('apply', { id: plan.id });
       toast(r.summary);
       await calculate();
     }), 'primary wide') : null));
+  if (S.ah?.linked) {
+    parts.push(el('div', { class: 'card' }, el('h3', {}, 'Zelf naar de AH'),
+      el('p', { class: 'muted small' }, 'Zet de boodschappen op Mijn lijst in de AH-app, zodat je ze in de winkel en in de zelfscanner ziet. Je Picnic-mand verandert niet.'),
+      btn('Op mijn AH-lijst zetten', () => run(ahListDialog, { reload: false }), 'secondary')));
+  }
   put(area, ...parts);
+  applyListSearch('plan-lines');
+  if (planStale && !planWrites) scheduleCalc();
+}
+
+/** De CSP staat geen style-attributen toe; via het CSSOM mag het wel. */
+function budgetFill(percent) {
+  const fill = el('div');
+  fill.style.width = percent + '%';
+  return fill;
+}
+
+async function ahListDialog() {
+  const proposal = await api('ah/proposal', {});
+  const chosen = new Set(proposal.map(p => p.id));
+  const rows = proposal.map(p => {
+    const box = el('input', { type: 'checkbox', checked: true, 'aria-label': 'Op de lijst: ' + p.text });
+    box.onchange = () => { if (box.checked) chosen.add(p.id); else chosen.delete(p.id); };
+    return el('label', { class: 'import-line' }, box, el('span', { class: 'row-text' }, el('span', { class: 'row-title' }, p.text)));
+  });
+  const extra = el('textarea', { placeholder: 'Nog iets anders? Eén per regel.', 'aria-label': 'Extra boodschappen' });
+  dialog('Op je AH-lijst zetten', el('div', { class: 'stack' },
+    el('p', { class: 'hint' }, 'Wat Weekmand nog wil kopen en niet al in je Picnic-mand zit. Wat al op je AH-lijst staat, slaat Weekmand over.'),
+    proposal.length ? el('div', { class: 'list' }, rows) : el('p', { class: 'hint' }, 'Weekmand hoeft nu niets te kopen. Zet hieronder zelf iets op de lijst.'),
+    el('label', {}, 'Extra', extra),
+    el('div', { class: 'row' },
+      btn('Op de lijst zetten', () => {
+        const more = extra.value.split('\n').map(s => s.trim()).filter(Boolean);
+        closeDialog();
+        run(async () => {
+          const r = await api('ah/send', { ids: [...chosen], extra: more });
+          toast(`${r.added.length} op je AH-lijst gezet${r.skipped.length ? `; ${r.skipped.length} stond${r.skipped.length === 1 ? '' : 'en'} er al op` : ''}.`);
+        }, { reload: false });
+      }, 'primary'),
+      btn('Annuleren', closeDialog, 'ghost'))));
 }
 
 $('extra-form').onsubmit = e => {
@@ -461,19 +690,20 @@ $('extra-form').onsubmit = e => {
   const m = /^(\d+(?:[.,]\d+)?)\s*(g|gram|kg|kilo|ml|l|liter)\s+(.+)$/i.exec(text);
   const n = /^(\d+)\s*[x×]?\s+(.+)$/i.exec(text);
   const item = m ? { name: m[3], amount: Number(m[1].replace(',', '.')), unit: m[2].toLowerCase() } : n ? { name: n[2], quantity: Number(n[1]) } : { name: text.replace(/^(een|1)\s+/i, '') };
-  run(async () => { const r = await api('order/add', { items: [item] }); toast('Toegevoegd: ' + r.added.join(', ')); $('extra').value = ''; plan = null; });
+  run(async () => { const r = await api('order/add', { items: [item] }); toast('Toegevoegd: ' + r.added.join(', ')); $('extra').value = ''; planStale = true; });
 };
 $('regular-form').onsubmit = e => {
   e.preventDefault();
   run(async () => {
     const results = await api('search', { query: $('regular-query').value });
-    put($('regular-results'), ...results.map(p => el('div', { class: 'pantry-item' },
+    const photos = results.some(p => p.image);
+    put($('regular-results'), ...results.map(p => el('div', { class: 'pantry-item' }, photos ? productPhoto(p.image) : null,
       el('span', { class: 'grow' }, p.name, el('span', { class: 'muted small' }, ` · ${p.unitQuantity} · ${money(p.cents)}`)),
-      btn('+ vast', () => run(async () => { await api('regular', { productId: p.id, enabled: true, quantity: 1 }); put($('regular-results'), ); plan = null; }), 'small'))));
+      btn('+ vast', () => run(async () => { await api('regular', { productId: p.id, enabled: true, quantity: 1 }); put($('regular-results'), ); planStale = true; }), 'small'))));
   }, { reload: false });
 };
 
-$('slot').onchange = () => run(async () => { await api('slot', { id: $('slot').value }); plan = null; });
+$('slot').onchange = () => run(async () => { await api('slot', { id: $('slot').value }); planStale = true; });
 $('demo-checkout').onclick = () => {
   if (!confirm('Demobestelling afronden? De mand wordt geleegd en de producten gaan in je voorraad.')) return;
   run(async () => { const r = await api('demo-checkout', {}); toast(`${r.delivered} producten "geleverd".`); plan = null; });
@@ -485,9 +715,11 @@ async function linkDialog(key) {
   const input = el('input', { value: name, 'aria-label': 'Zoekterm' });
   const search = async () => {
     const products = await api('search', { query: input.value }).catch(e => { toast(e.message, true); return []; });
-    put(results, ...products.map(p => el('button', { type: 'button', class: 'recipe-option', onclick: () => run(async () => {
-      await api('link', { name: key, productId: p.id }); closeDialog(); toast(`${name} gekoppeld aan ${p.name}.`); plan = null;
-    }) }, el('b', {}, p.name), el('span', { class: 'muted small' }, `${p.unitQuantity} · ${money(p.cents)}${p.available ? '' : ' · niet leverbaar'}`))));
+    const photos = products.some(p => p.image);
+    put(results, ...products.map(p => el('button', { type: 'button', class: 'recipe-option product-option', onclick: () => run(async () => {
+      await api('link', { name: key, productId: p.id }); closeDialog(); toast(`${name} gekoppeld aan ${p.name}.`); planStale = true;
+    }) }, photos ? productPhoto(p.image) : null, el('span', { class: 'grow' }, el('b', {}, p.name),
+      el('span', { class: 'muted small' }, [p.brand, p.unitQuantity, money(p.cents), p.unitPrice, p.available ? null : 'niet leverbaar'].filter(Boolean).join(' · '))))));
   };
   dialog('Product voor ' + name, el('div', { class: 'stack' }, el('form', { class: 'row', onsubmit: e => { e.preventDefault(); search(); } }, input, el('button', {}, 'Zoek')), results));
   search();
@@ -496,15 +728,19 @@ async function linkDialog(key) {
 // ───────────── Voorraad ─────────────
 
 let openPantry = null; // sleutel van de regel waarvan de bewerker open staat
-const shortOf = i => i.amount === null || i.amount < i.neededThisOrder;
+/** In huis plus wat al in de mand ligt. */
+const covered = i => (i.amount ?? 0) + (i.inCart || 0);
+const shortOf = i => covered(i) < i.neededThisOrder;
+const inCartOnly = i => !shortOf(i) && (i.amount ?? 0) < i.neededThisOrder;
 
 /** Status van een product, in verhouding tot het menu als het menu het nodig heeft. */
 function pantryStatus(i) {
   const need = i.neededThisOrder || 0;
   if (need > 0) {
-    if (i.amount === null) return { text: 'onbekend · wordt besteld', tone: 'short' };
-    if (i.amount >= need) return { text: 'genoeg', tone: 'ok' };
-    return { text: `tekort · nog ${amountText(need - i.amount, i.unit)}`, tone: 'short' };
+    if ((i.amount ?? 0) >= need) return { text: 'genoeg', tone: 'ok' };
+    if (covered(i) >= need) return { text: 'in je mand', tone: 'ok' };
+    if (i.amount === null && !i.inCart) return { text: 'onbekend · wordt besteld', tone: 'short' };
+    return { text: `tekort · nog ${amountText(need - covered(i), i.unit)}`, tone: 'short' };
   }
   if (i.amount === null) return { text: 'onbekend', tone: '' };
   if (i.amount === 0) return { text: 'op', tone: 'out' };
@@ -515,7 +751,7 @@ function pantryStatus(i) {
 function pantryRow(i) {
   const need = i.neededThisOrder || 0;
   const status = pantryStatus(i);
-  const detail = need > 0 ? `menu ${amountText(need, i.unit)} · in huis ${i.amount === null ? 'onbekend' : amountText(i.amount, i.unit)}`
+  const detail = need > 0 ? `menu ${amountText(need, i.unit)} · in huis ${i.amount === null ? 'onbekend' : amountText(i.amount, i.unit)}${i.inCart ? ` · in mand ${amountText(i.inCart, i.unit)}` : ''}`
     : i.minimum ? `altijd minimaal ${amountText(i.minimum, i.unit)}` : null;
   const open = openPantry === i.key;
   return el('div', { class: 'list-row' + (open ? ' open' : '') },
@@ -529,7 +765,7 @@ function pantryEditor(i) {
   const unitLabel = { g: 'gram', ml: 'ml', st: 'stuks' }[i.unit] ?? i.unit;
   const amount = el('input', { type: 'number', min: '0', step: 'any', inputmode: 'decimal', value: i.amount ?? '', placeholder: 'onbekend' });
   const minimum = el('input', { type: 'number', min: '0', step: 'any', inputmode: 'decimal', value: i.minimum || '', placeholder: 'geen' });
-  const save = (items, message) => run(async () => { await api('pantry', { items }); openPantry = null; toast(message); plan = null; });
+  const save = (items, message) => run(async () => { await api('pantry', { items }); openPantry = null; toast(message); planStale = true; });
   setTimeout(() => { amount.focus(); amount.select(); }, 0);
   return el('form', { class: 'row-editor', onsubmit: e => {
     e.preventDefault();
@@ -546,20 +782,42 @@ function renderPantry() {
   const p = S.pantry;
   put($('scan-button'), icon('scan'), 'Barcode scannen');
   put($('quick'), p.quick.map(q => el('button', { type: 'button', class: 'chip', onclick: () => run(async () => {
-    await api('pantry/out', { name: q.key }); toast(`${q.name} staat op 0 en komt in het volgende voorstel.`); plan = null;
+    await api('pantry/out', { name: q.key }); toast(`${q.name} staat op 0 en komt in het volgende voorstel.`); planStale = true;
   }) }, q.name)));
-  const menu = p.items.filter(i => i.neededThisOrder > 0)
+  // Wat in de mand ligt: uit de mandberekening in deze pagina (nieuwst), anders uit die van de server.
+  const cartIn = new Map();
+  for (const l of plan?.lines ?? []) if (l.key && l.inCartAmount) cartIn.set(l.key, Math.max(cartIn.get(l.key) ?? 0, l.inCartAmount));
+  const items = plan ? p.items.map(i => ({ ...i, inCart: cartIn.get(i.key) ?? 0 })) : p.items;
+  const menu = items.filter(i => i.neededThisOrder > 0)
     .sort((a, b) => Number(shortOf(b)) - Number(shortOf(a)) || a.name.localeCompare(b.name, 'nl'));
-  const other = p.items.filter(i => !(i.neededThisOrder > 0)).sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+  const other = items.filter(i => !(i.neededThisOrder > 0)).sort((a, b) => a.name.localeCompare(b.name, 'nl'));
   const short = menu.filter(shortOf).length;
+  const cart = menu.filter(inCartOnly).length;
+  const cartText = cart ? `${cart} ${cart === 1 ? 'ligt' : 'liggen'} al in je mand.` : '';
   $('menu-need-hint').textContent = !menu.length ? 'Er staat nog geen menu voor deze bestelling.'
-    : short ? `${short} van de ${menu.length} ingrediënten heb je niet of niet genoeg in huis. Die bestelt Weekmand, of ze liggen al in je mand. Klopt iets niet? Tik de regel en vul in wat je hebt.`
-      : 'Alles voor het menu is in huis.';
+    : short ? `${short} van de ${menu.length} ingrediënten heb je nog niet genoeg; die bestelt Weekmand. ${cartText} Klopt iets niet? Tik de regel en vul in wat je hebt.`
+      : cart ? `Alles voor het menu is in huis of ligt in je mand. ${cartText}` : 'Alles voor het menu is in huis.';
   $('pantry-menu').hidden = !menu.length;
   put($('pantry-menu'), menu.map(pantryRow));
   put($('pantry-other'), other.length ? other.map(pantryRow) : el('p', { class: 'hint empty' }, 'Nog niets bijgehouden buiten het menu.'));
   put($('ingredient-list'), S.ingredients.map(i => el('option', { value: i.name })));
+  $('ah-receipts-action').hidden = !S.ah?.linked;
+  applyListSearch('pantry-menu');
+  applyListSearch('pantry-other');
+  if ($('tab-pantry').classList.contains('active')) loadPlanQuietly();
 }
+
+function fetchReceipts() {
+  run(async () => {
+    const { receipts } = await api('ah/receipts', {});
+    const counted = receipts.reduce((n, r) => n + r.counted.length, 0);
+    const unmatched = receipts.reduce((n, r) => n + r.unmatched.length, 0);
+    toast(!receipts.length ? 'Geen nieuwe kassabonnen.'
+      : `${receipts.length} ${receipts.length === 1 ? 'kassabon' : 'kassabonnen'}: ${counted} producten bij de voorraad geteld${unmatched ? `, ${unmatched} niet herkend (zie Meer → Albert Heijn)` : ''}.`);
+    planStale = true;
+  });
+}
+$('ah-receipts').onclick = fetchReceipts;
 
 $('pantry-add').onsubmit = e => {
   e.preventDefault();
@@ -578,7 +836,7 @@ $('pantry-rebuild').onclick = () => {
   run(async () => {
     const r = await api('pantry/rebuild', {});
     toast(`Levering van ${fmtDate(r.delivery)}: ${r.counted.length} producten geteld, ${r.unmatched.length} niet herkend.`);
-    plan = null;
+    planStale = true;
   });
 };
 
@@ -653,14 +911,6 @@ $('recipe-tabs').onclick = e => {
   recipeQuery = ''; recipeTag = ''; recipeLimit = 40;
   renderRecipesTab();
 };
-$('recipe-tabs').onkeydown = e => {
-  if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
-  const tabs = [...$('recipe-tabs').querySelectorAll('[data-sub]')];
-  const next = tabs[(tabs.findIndex(t => t.dataset.sub === recipeTab) + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
-  recipeTab = next.dataset.sub;
-  renderRecipesTab();
-  next.focus();
-};
 
 function whenText(r) {
   if (r.lastEaten) return 'Laatst gegeten ' + fmtShort(r.lastEaten);
@@ -697,10 +947,7 @@ function catalog(recipes, empty) {
 }
 
 async function renderRecipesTab() {
-  for (const b of $('recipe-tabs').querySelectorAll('[data-sub]')) {
-    b.setAttribute('aria-selected', String(b.dataset.sub === recipeTab));
-    b.tabIndex = b.dataset.sub === recipeTab ? 0 : -1;
-  }
+  for (const b of $('recipe-tabs').querySelectorAll('[data-sub]')) b.setAttribute('aria-pressed', String(b.dataset.sub === recipeTab));
   const panel = $('recipes-panel');
   try {
     if (recipeTab === 'eaten') await renderEaten(panel);
@@ -775,7 +1022,57 @@ async function renderAllCatalog(panel) {
     chips.querySelectorAll('.chip').forEach(ch => { ch.classList.toggle('on', ch.textContent === recipeTag); ch.setAttribute('aria-pressed', String(ch.textContent === recipeTag)); });
     c.draw();
   } }, t)));
-  put(panel, c.search, chips, c.grid, ownRecipeForm());
+  put(panel, el('h3', { class: 'first' }, 'Recept van een website'), importForm(), el('p', { class: 'hint' }, 'Werkt met de meeste receptsites. Lukt ophalen niet, zoals bij Allerhande en Plus, plak dan de ingrediënten.'), pasteForm(),
+    el('h3', {}, 'Alle recepten'), c.search, chips, c.grid, ownRecipeForm());
+}
+
+/** Recept van een website: link plakken, voorbeeld bekijken, opslaan. */
+function importForm() {
+  const url = el('input', { type: 'url', inputmode: 'url', placeholder: 'Plak een link naar een recept', 'aria-label': 'Link naar recept', required: true });
+  return el('form', { class: 'import-row', onsubmit: e => {
+    e.preventDefault();
+    run(async () => { showImportPreview(await api('recipe/import-preview', { url: url.value.trim() })); url.value = ''; }, { reload: false });
+  } }, url, el('button', { class: 'primary' }, 'Ophalen'));
+}
+
+/** Voor sites die het recept niet leesbaar in de pagina zetten: de ingrediënten zelf plakken. */
+function pasteForm() {
+  const name = el('input', { placeholder: 'Naam van het gerecht', 'aria-label': 'Naam' });
+  const servings = el('input', { type: 'number', min: '1', max: '40', value: '4', 'aria-label': 'Aantal personen' });
+  const text = el('textarea', { required: true, placeholder: '400 g kipfilet\n1 ui\n2 el olijfolie', 'aria-label': 'Ingrediënten' });
+  return el('details', { class: 'disclosure' }, el('summary', {}, 'Ingrediënten plakken'),
+    el('form', { class: 'stack', onsubmit: e => {
+      e.preventDefault();
+      run(async () => showImportPreview(await api('recipe/import-text', { name: name.value, servings: Number(servings.value), text: text.value })), { reload: false });
+    } },
+    el('p', { class: 'hint' }, 'Kopieer de ingrediëntenlijst van de receptpagina, één ingrediënt per regel.'),
+    el('label', {}, 'Naam', name), el('label', {}, 'Voor hoeveel personen', servings),
+    el('label', {}, 'Ingrediënten', text),
+    el('button', { class: 'secondary' }, 'Omrekenen')));
+}
+
+function showImportPreview(preview) {
+  const skip = new Set();
+  const unitText = { g: 'g', ml: 'ml', st: 'st' };
+  const rows = preview.lines.map(l => {
+    const usable = l.status !== 'overgeslagen';
+    const box = el('input', { type: 'checkbox', checked: usable || undefined, disabled: usable ? undefined : true, 'aria-label': 'Meenemen: ' + l.original });
+    box.onchange = () => { if (box.checked) skip.delete(l.original); else skip.add(l.original); };
+    return el('label', { class: 'import-line' + (usable ? '' : ' skipped') }, box,
+      el('span', { class: 'row-text' },
+        el('span', { class: 'row-title' }, usable ? `${l.name} · ${amountText(l.amount, l.unit)} p.p.` : l.original),
+        el('span', { class: 'row-detail' }, usable ? l.original : `Overgeslagen: ${l.note}`)),
+      l.status === 'nieuw' ? el('span', { class: 'tag strong' }, 'nieuw') : l.note === 'basisvoorraad' ? el('span', { class: 'tag' }, 'basisvoorraad') : null);
+  });
+  dialog(preview.name, el('div', { class: 'stack' },
+    el('p', { class: 'hint' }, `Omgerekend van ${preview.servings} personen naar hoeveelheden per persoon · ${preview.minutes} min. Vink uit wat je niet wilt meenemen. "Nieuw" betekent dat Weekmand dit ingrediënt nog niet kende; het wordt toegevoegd.`),
+    el('div', { class: 'list' }, rows),
+    el('div', { class: 'row' },
+      btn('Recept opslaan', () => { closeDialog(); run(async () => {
+        const r = await api('recipe/import-save', { preview, skip: [...skip] });
+        toast(`"${r.name}" staat bij je recepten.`);
+      }); }, 'primary'),
+      btn('Annuleren', closeDialog, 'ghost'))));
 }
 
 function ownRecipeForm() {
@@ -804,7 +1101,7 @@ function planFavorite(f) {
   dialog(f.name + ' op het menu', el('div', { class: 'stack' }, el('p', { class: 'hint' }, 'Kies een dag:'),
     ...S.menu.days.map(d => el('button', { type: 'button', class: 'recipe-option', onclick: () => {
       closeDialog();
-      run(async () => { await api('meal/set', { date: d.date, recipeId: f.id, servings: d.meal?.servings ?? portions }); toast(`${f.name} staat op ${d.day}.`); plan = null; });
+      run(async () => { await api('meal/set', { date: d.date, recipeId: f.id, servings: d.meal?.servings ?? portions }); toast(`${f.name} staat op ${d.day}.`); planStale = true; });
     } }, el('b', {}, `${d.day} ${fmtDate(d.date)}`), el('span', { class: 'muted small' }, d.meal ? 'Nu: ' + d.meal.name : 'Nog niets gepland')))));
 }
 
@@ -815,7 +1112,7 @@ function renderChatMode() {
     : 'Geen AI gekoppeld: ik begrijp vaste commando\'s zoals "menu", "mand", "melk is op", "voeg een krat pils toe en haal de kipfilet eruit". Koppel een AI onder Meer voor vrije tekst.';
   put($('notices'), ...S.notices.slice(0, 3).map(n => el('div', { class: 'card highlight' },
     el('p', { class: 'muted small' }, 'Melding · ' + new Date(n.at).toLocaleString('nl-NL', { weekday: 'short', hour: '2-digit', minute: '2-digit' })),
-    el('p', { style: 'white-space:pre-wrap' }, n.text),
+    el('p', { class: 'pre-wrap' }, n.text),
     n.buttons?.length ? el('div', { class: 'row' }, ...n.buttons.map(b => btn(b.label, () => run(async () => {
       const r = await api('action', { data: b.data });
       addMessage('assistant', r.text, r.buttons);
@@ -825,10 +1122,10 @@ function renderChatMode() {
 
 function addMessage(role, text, buttons) {
   const msg = el('div', { class: 'msg ' + role }, text);
-  if (buttons?.length) msg.append(el('div', { class: 'row', style: 'margin-top:.5rem' }, ...buttons.map(b => btn(b.label, () => run(async () => {
+  if (buttons?.length) msg.append(el('div', { class: 'row msg-actions' }, ...buttons.map(b => btn(b.label, () => run(async () => {
     const r = await api('action', { data: b.data });
     addMessage('assistant', r.text, r.buttons);
-    plan = null;
+    planStale = true;
   }), 'small' + (b.data.startsWith('apply') ? ' primary' : '')))));
   $('chat').append(msg);
   msg.scrollIntoView({ block: 'end', behavior: 'smooth' });
@@ -855,7 +1152,7 @@ $('chat-form').onsubmit = e => {
       const r = await api('chat', { message: text });
       thinking.remove();
       addMessage('assistant', r.reply, r.reviewId ? [{ label: 'Naar Picnic sturen', data: 'apply:' + r.reviewId }, { label: 'Niet nu', data: 'skip:' + r.reviewId }] : undefined);
-      plan = null;
+      planStale = true;
     } catch (error) { thinking.remove(); throw error; }
   });
 };
@@ -872,6 +1169,7 @@ function renderMore() {
   renderAppearance();
   renderAccounts();
   renderPicnic();
+  renderAh();
   renderAI();
   renderTelegram();
   renderIntegrations();
@@ -885,7 +1183,7 @@ $('household-form').onsubmit = e => {
       adults: Number(f.adults.value), children: Number(f.children.value), toddlers: Number(f.toddlers.value), days: Number(f.days.value),
       budget: Number(f.budget.value), vegetarian: f.vegetarian.checked, exclude: f.exclude.value.split(',').map(s => s.trim()).filter(Boolean),
     });
-    toast('Opgeslagen.'); plan = null;
+    toast('Opgeslagen.'); planStale = true;
   });
 };
 
@@ -930,6 +1228,64 @@ function renderPicnic() {
   put($('picnic'), ...parts);
 }
 
+function renderAh() {
+  const a = S.ah;
+  const parts = [el('p', { class: 'muted small' }, 'Voor boodschappen in de AH-winkel. Weekmand zet boodschappen op Mijn lijst in de AH-app (ook in de zelfscanner) en telt je kassabonnen bij de voorraad. Weekmand bestelt niets bij AH en krijgt je wachtwoord niet te zien.')];
+  if (a.linked) {
+    parts.push(el('p', {}, el('b', {}, 'Gekoppeld'), a.linkedAt ? ` sinds ${fmtDate(a.linkedAt.slice(0, 10))}` : ''),
+      el('p', { class: 'muted small' }, (a.lastSync ? `Kassabonnen laatst opgehaald ${dateFmt.format(new Date(a.lastSync))} ${timeFmt.format(new Date(a.lastSync))}. ` : '') + 'Weekmand kijkt elke vier uur naar nieuwe bonnen.'));
+    if (a.receipts.length) {
+      parts.push(el('h3', {}, 'Laatste kassabonnen'), ...a.receipts.map(r => el('details', { class: 'disclosure' },
+        el('summary', {}, `${fmtDate(r.date.slice(0, 10))}${r.total !== null ? ' · ' + money(Math.round(r.total * 100)) : ''} · ${r.counted.length} geteld${r.unmatched.length ? ` · ${r.unmatched.length} niet herkend` : ''}`),
+        ...r.counted.map(t => el('p', { class: 'small' }, t)),
+        ...r.unmatched.map(t => el('p', { class: 'small muted' }, `Niet herkend: ${t}`)),
+        ...(r.ignored ?? []).map(t => el('p', { class: 'small muted' }, `Overgeslagen (geen boodschap): ${t}`)))));
+    }
+    if (a.unmatched?.length) {
+      parts.push(el('h3', {}, 'Niet herkend'),
+        el('p', { class: 'hint' }, 'Kies het ingrediënt waar een bonregel bij hoort, of negeer hem (bijvoorbeeld keukenrol). Weekmand telt hem dan alsnog bij de voorraad en onthoudt het voor volgende bonnen.'),
+        ...a.unmatched.map(receiptMapRow),
+        S.ai ? btn('Laat de AI zoeken', () => run(async () => {
+          const r = await api('ah/match', {});
+          toast(r.matched.length ? `De AI heeft ${r.matched.length} ${r.matched.length === 1 ? 'regel' : 'regels'} gekoppeld${r.unknown.length ? `; ${r.unknown.length} bleef onbekend` : ''}.` : 'De AI herkende geen van deze regels.');
+          planStale = true;
+        }), 'small secondary') : el('p', { class: 'hint' }, 'Met een gekoppelde AI (Meer → AI-aanbieder) zoekt Weekmand deze regels zelf op.'));
+    }
+    parts.push(el('div', { class: 'row' },
+      btn('Kassabonnen ophalen', fetchReceipts, 'small'),
+      S.canConfigure ? btn('Ontkoppelen', () => { if (confirm('AH-account ontkoppelen? Weekmand vergeet de toegang; je lijst en bonnen bij AH blijven staan.')) run(() => api('ah/unlink', {})); }, 'small danger') : null));
+  } else if (!S.canConfigure) {
+    parts.push(el('p', { class: 'muted small' }, 'Koppelen kan alleen via localhost of het toegestane thuisnetwerk.'));
+  } else {
+    const code = el('input', { autocomplete: 'off', required: true, placeholder: 'appie://login-exit?code=…', 'aria-label': 'Inlogcode van AH' });
+    parts.push(el('ol', { class: 'steps' },
+      el('li', {}, 'Gebruik Chrome of Edge op een computer. ', el('a', { href: a.loginUrl, target: '_blank', rel: 'noopener noreferrer' }, 'Open de inlogpagina van AH'), '; die opent in een nieuw tabblad.'),
+      el('li', {}, 'Druk in dát tabblad op F12, kies het tabblad Network (Netwerk) en typ ', el('code', {}, 'ingelogd'), ' in het filterveld. Doe dit vóórdat je inlogt.'),
+      el('li', {}, 'Log in en vul de sms-code in. Het scherm blijft daarna hangen met een draaiend rondje. Dat is normaal.'),
+      el('li', {}, 'In de lijst staat nu één regel: ', el('code', {}, 'ingelogd.json'), '. Klik erop en kies Response (Reactie). Je ziet een regel met appie://login-exit?code=…'),
+      el('li', {}, 'Klik in die tekst, druk op Ctrl+A en Ctrl+C, en plak het hieronder. Weekmand haalt de code eruit. Doe dit binnen een paar minuten: de code werkt één keer.')),
+    el('p', { class: 'hint' }, 'Geen ingelogd.json in de lijst? Dan stond F12 nog niet open toen je inlogde. Laat F12 open, ververs de inlogpagina en log opnieuw in.'),
+    el('form', { class: 'import-row', onsubmit: e => {
+      e.preventDefault();
+      run(async () => { await api('ah/link', { code: code.value }); code.value = ''; toast('AH-account gekoppeld. Weekmand haalt de kassabonnen van de afgelopen drie dagen op.'); });
+    } }, code, el('button', { class: 'primary' }, 'Koppelen')));
+  }
+  put($('ah'), ...parts);
+}
+
+/** Eén onbekende bonregel: koppelen aan een ingrediënt of negeren. */
+function receiptMapRow(u) {
+  const input = el('input', { list: 'ingredient-list', required: true, placeholder: 'Hoort bij…', 'aria-label': 'Ingrediënt voor ' + u.name });
+  return el('form', { class: 'map-row', onsubmit: e => {
+    e.preventDefault();
+    run(async () => { await api('ah/map', { name: u.name, ingredient: input.value.trim() }); toast(`${u.name} telt voortaan als ${input.value.trim()}.`); planStale = true; });
+  } },
+  el('span', { class: 'map-name' }, u.quantity > 1 ? `${u.quantity}× ${u.name}` : u.name),
+  el('span', { class: 'map-controls' }, input,
+    el('button', { class: 'small' }, 'Koppel'),
+    btn('Negeer', () => run(async () => { await api('ah/map', { name: u.name, ingredient: null }); toast(`${u.name} wordt voortaan overgeslagen.`); }), 'small ghost')));
+}
+
 function renderAI() {
   const parts = [el('p', {}, S.ai ? el('b', {}, `Actief: ${S.ai.label} · ${S.ai.model} (${S.ai.source})`) : 'Geen AI gekoppeld. De chat werkt dan met vaste commando\'s.')];
   if (!S.canConfigure) {
@@ -952,6 +1308,364 @@ function renderAI() {
   put($('ai'), ...parts);
 }
 
+// ───────────── Budget ─────────────
+
+const budgetView = { period: 'month', offset: 0 };
+let budgetData = null;
+let budgetOpenCat = null;
+const kindClass = { nodig: 'k-nodig', extra: 'k-extra', 'geen-eten': 'k-geen' };
+const kindOptions = [['nodig', 'Nodig'], ['extra', 'Extra: snack of traktatie'], ['geen-eten', 'Geen eten']];
+const pctOf = (part, whole) => whole > 0 ? Math.round(part / whole * 100) + '%' : '';
+/** Breedte, hoogte of positie in procenten via het CSSOM: de CSP staat geen style-attributen toe. */
+function sized(node, prop, percent) { node.style[prop] = Math.max(0, Math.min(100, percent || 0)) + '%'; return node; }
+const dayMonth = new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+const shortDate = date => dayMonth.format(new Date(date + 'T12:00:00Z'));
+
+async function loadBudget() {
+  try {
+    budgetData = await api('budget', budgetView);
+    renderBudget();
+  } catch (e) { put($('budget'), el('p', { class: 'warn' }, e.message)); }
+}
+
+for (const b of $('budget-periods').querySelectorAll('button')) b.onclick = () => {
+  budgetView.period = b.dataset.period;
+  budgetView.offset = 0;
+  budgetOpenCat = null;
+  for (const x of $('budget-periods').querySelectorAll('button')) x.setAttribute('aria-selected', String(x === b));
+  loadBudget();
+};
+const syncBudget = () => run(async () => {
+  toast('Uitgaven ophalen bij Picnic en AH…');
+  const r = await api('budget/sync', {});
+  toast(r.errors?.length ? r.errors.join(' ') : r.added || r.detailed ? `${r.added} nieuwe aankopen, ${r.detailed} uitgesplitst.` : 'Alles is al bijgewerkt.', !!r.errors?.length);
+  await loadBudget();
+}, { reload: false });
+$('budget-sync').onclick = syncBudget;
+
+// Foto van een kassabon: de AI leest hem, jij controleert, daarna pas opslaan.
+$('budget-photo').onclick = () => $('budget-photo-input').click();
+$('budget-photo-input').onchange = () => {
+  const file = $('budget-photo-input').files?.[0];
+  $('budget-photo-input').value = '';
+  if (!file) return;
+  run(async () => {
+    toast('Bon lezen… Dit kan een halve minuut duren.');
+    const preview = await api('budget/photo', { image: await photoData(file) });
+    photoDialog(preview);
+  }, { reload: false });
+};
+
+/** Foto verkleinen tot hooguit 2048 px als JPEG: scherp genoeg voor bonnetjes, klein genoeg om te versturen. */
+async function photoData(file) {
+  let bitmap;
+  try { bitmap = await createImageBitmap(file); } catch { throw new Error('Deze foto kan de browser niet openen. Probeer een jpg of png.'); }
+  const scale = Math.min(1, 2048 / Math.max(bitmap.width, bitmap.height));
+  const canvas = el('canvas');
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  return canvas.toDataURL('image/jpeg', 0.85);
+}
+
+function photoDialog(p) {
+  const lines = p.lines.map(l => ({ ...l, keep: true }));
+  const shop = el('input', { value: p.shop, maxlength: '60', required: true });
+  const date = el('input', { type: 'date', value: p.date, max: budgetData?.today, required: true });
+  const total = el('input', { type: 'text', inputmode: 'decimal', value: (p.totalCents / 100).toFixed(2).replace('.', ','), required: true });
+  const pantry = el('input', { type: 'checkbox', checked: true });
+  const sumLine = el('p', { class: 'small' });
+  const totalCents = () => Math.round(Number(total.value.replace(',', '.')) * 100);
+  const update = () => {
+    const sum = lines.filter(l => l.keep).reduce((s, l) => s + l.cents, 0) + p.discounts.reduce((s, d) => s + d.cents, 0);
+    const diff = totalCents() - sum;
+    sumLine.className = 'small ' + (Math.abs(diff) > 2 ? 'warn' : 'muted');
+    sumLine.textContent = Math.abs(diff) > 2
+      ? `De regels zijn samen ${money(sum)}, ${money(Math.abs(diff))} ${diff > 0 ? 'minder' : 'meer'} dan het totaal. Kijk het totaal of de regels na.`
+      : `Regels en totaal kloppen (${money(sum)}).`;
+  };
+  const row = l => {
+    const node = el('div', { class: 'prod-row' + (l.keep ? '' : ' excluded') },
+      el('span', { class: 'grow' }, `${num.format(l.quantity)}× ${l.name}`),
+      l.kind === 'extra' ? el('span', { class: 'pill low' }, 'extra') : l.kind === 'geen-eten' ? el('span', { class: 'pill' }, 'geen eten') : null,
+      el('b', {}, money(l.cents)),
+      iconBtn(l.keep ? 'x' : 'plus', l.keep ? 'Regel weglaten' : 'Regel terugzetten', () => { l.keep = !l.keep; node.replaceWith(row(l)); update(); }));
+    return node;
+  };
+  total.oninput = update;
+  update();
+  dialog('Bon controleren', el('div', { class: 'stack' },
+    el('p', { class: 'hint' }, 'Zo las de AI je bon. Klopt iets niet, pas het dan aan of laat een regel weg.'),
+    p.duplicate ? el('p', { class: 'warn small' }, `Deze bon lijkt er al te staan: ${p.duplicate.shop}, ${shortDate(p.duplicate.date)}, ${money(p.duplicate.totalCents)}.`) : null,
+    el('div', { class: 'grid' }, el('label', {}, 'Winkel', shop), el('label', {}, 'Datum', date)),
+    el('label', {}, 'Totaal betaald (€)', total),
+    sumLine,
+    el('div', { class: 'list' }, lines.map(row),
+      p.discounts.map(d => el('div', { class: 'prod-row' }, el('span', { class: 'grow muted' }, d.name), el('b', {}, '−' + money(-d.cents))))),
+    el('label', { class: 'check' }, pantry, 'Ook bij de voorraad tellen'),
+    el('div', { class: 'row' },
+      btn(p.duplicate ? 'Toch opslaan' : 'Opslaan', () => {
+        closeDialog();
+        run(async () => {
+          const r = await api('budget/photo/save', { shop: shop.value, date: date.value, totalCents: totalCents(), lines: lines.filter(l => l.keep), discounts: p.discounts, pantry: pantry.checked, force: !!p.duplicate });
+          toast('Bon opgeslagen' + (r.pantry ? `; ${r.pantry.counted.length} producten bij de voorraad geteld${r.pantry.unmatched.length ? `, ${r.pantry.unmatched.length} niet herkend` : ''}` : '') + '.');
+          await loadBudget();
+        }, { reload: pantry.checked });
+      }, 'primary'),
+      btn('Annuleren', closeDialog, 'ghost'))));
+}
+
+function stat(label, value, sub) {
+  return el('div', { class: 'stat' }, el('span', { class: 'stat-label' }, label), el('b', {}, value), sub ? el('span', { class: 'muted small' }, sub) : null);
+}
+
+function renderBudget() {
+  const b = budgetData;
+  if (!b) return;
+  const unit = { week: 'week', month: 'maand', year: 'jaar' }[b.period];
+  const thisOne = { week: 'deze week', month: 'deze maand', year: 'dit jaar' }[b.period];
+  const lastOne = { week: 'Vorige week', month: 'Vorige maand', year: 'Vorig jaar' }[b.period];
+  const over = b.totalCents > b.budget;
+  const parts = [];
+
+  const next = iconBtn('right', 'Volgende ' + unit, () => { budgetView.offset++; budgetOpenCat = null; loadBudget(); });
+  if (b.offset >= 0) next.classList.add('invisible');
+  parts.push(el('div', { class: 'period-nav' },
+    iconBtn('left', 'Vorige ' + unit, () => { budgetView.offset--; budgetOpenCat = null; loadBudget(); }),
+    el('b', {}, b.range.label), next));
+
+  if (!b.sync.total && !b.count) {
+    parts.push(el('div', { class: 'card highlight' }, el('h3', {}, 'Nog geen uitgaven'),
+      el('p', {}, b.sync.sources.picnic || b.sync.sources.ah
+        ? 'Weekmand haalt je Picnic-bezorgingen en AH-kassabonnen van de afgelopen drie jaar op. De totalen zijn er meteen; de producten per bon volgen rustig, een paar per uur.'
+        : 'Meld je aan bij Picnic of koppel je AH-account (Meer), dan houdt Weekmand je uitgaven vanzelf bij. Andere uitgaven voer je hieronder zelf in.'),
+      b.sync.sources.picnic || b.sync.sources.ah ? btn('Nu ophalen', syncBudget, 'primary') : null));
+  }
+
+  // Hoofdblok: uitgegeven tegenover het budget.
+  const left = b.budget - b.totalCents;
+  parts.push(el('div', { class: 'card budget-hero' },
+    el('p', { class: 'muted small' }, b.current ? `Uitgegeven ${thisOne}` : `Uitgegeven in ${b.range.label}`),
+    el('p', { class: 'big' }, money(b.totalCents), el('span', { class: 'muted' }, ` van ${money(b.budget)}`)),
+    el('div', { class: 'budget' + (over ? ' over' : '') }, sized(el('div'), 'width', b.totalCents / b.budget * 100)),
+    el('p', { class: over ? 'warn' : '' }, over ? `${money(-left)} boven budget` : `Nog ${money(left)} over`,
+      b.forecastCents ? el('span', { class: 'muted' }, ` · op deze koers ${money(b.forecastCents)}`) : null),
+    el('p', { class: 'muted small' }, `${lastOne}: ${money(b.previousCents)}`,
+      !b.current && b.previousCents ? ` (${b.totalCents >= b.previousCents ? '+' : '−'}${pctOf(Math.abs(b.totalCents - b.previousCents), b.previousCents)})` : ''),
+    b.customBudget ? null : el('p', { class: 'hint' }, `Budget afgeleid van je mandbudget (${money(b.monthBudget)} per maand). Stel onderaan een eigen maandbudget in.`)));
+
+  const weeks = Math.max(1, b.elapsed / 7);
+  parts.push(el('div', { class: 'grid stats' },
+    stat('Per persoon per dag', money(b.perPersonDayCents), `${b.persons} ${b.persons === 1 ? 'persoon' : 'personen'}`),
+    b.period === 'week' ? stat('Per dag', money(Math.round(b.totalCents / b.elapsed))) : stat('Per week', money(Math.round(b.totalCents / weeks)), 'gemiddeld'),
+    stat('Bespaard met acties', money(b.savingsCents), 'Picnic-acties en AH-bonus'),
+    stat('Aankopen', String(b.count), b.count ? `${money(Math.round(b.totalCents / b.count))} per keer` : null)));
+
+  // Verloop: tik een staaf om naar die periode te gaan.
+  const max = Math.max(...b.trend.map(t => Math.max(t.cents, t.budget)), 1);
+  const columns = `repeat(${b.trend.length}, 1fr)`;
+  const plot = el('div', { class: 'trend-plot' }, b.trend.map(t => el('button', {
+    type: 'button', class: 'trend-col' + (t.offset === b.offset ? ' on' : '') + (t.cents > t.budget ? ' over' : ''),
+    'aria-label': `${t.title}: ${money(t.cents)}`, title: `${t.title}: ${money(t.cents)}`,
+    onclick: () => { budgetView.offset = t.offset; budgetOpenCat = null; loadBudget(); },
+  }, sized(el('span', { class: 'trend-bar' }), 'height', t.cents / max * 100))),
+  sized(el('span', { class: 'trend-line', title: 'Budget' }), 'bottom', b.trend[0].budget / max * 100));
+  plot.style.gridTemplateColumns = columns;
+  const labels = el('div', { class: 'trend-labels', 'aria-hidden': 'true' }, b.trend.map(t => el('span', { class: t.offset === b.offset ? 'on' : '' }, t.label.replace('wk ', ''))));
+  labels.style.gridTemplateColumns = columns;
+  parts.push(el('section', { class: 'card' },
+    el('h3', {}, { week: 'Laatste twaalf weken', month: 'Laatste twaalf maanden', year: 'Per jaar' }[b.period]),
+    el('p', { class: 'hint' }, 'De stippellijn is het budget. Tik een staaf om die periode te bekijken.'),
+    plot, labels));
+
+  // Nodig of extra.
+  const kindTotal = b.kinds.reduce((s, k) => s + k.cents, 0);
+  parts.push(el('section', { class: 'card' }, el('h3', {}, 'Nodig of extra?'),
+    kindTotal > 0
+      ? el('div', { class: 'stackbar', role: 'img', 'aria-label': b.kinds.map(k => `${k.label} ${pctOf(k.cents, kindTotal)}`).join(', ') },
+        b.kinds.filter(k => k.cents > 0).map(k => sized(el('span', { class: kindClass[k.key] }), 'width', k.cents / kindTotal * 100)))
+      : el('p', { class: 'hint' }, 'Nog geen producten om in te delen.'),
+    ...b.kinds.map(k => el('div', { class: 'legend-row' }, el('span', { class: 'dot ' + kindClass[k.key] }), el('span', { class: 'grow' }, k.label),
+      el('span', { class: 'muted small' }, pctOf(k.cents, kindTotal)), el('b', {}, money(k.cents)))),
+    b.unlabeled ? el('div', { class: 'row' }, el('p', { class: 'hint grow' }, `${b.unlabeled} ${b.unlabeled === 1 ? 'product is' : 'producten zijn'} nog niet ingedeeld en ${b.unlabeled === 1 ? 'telt' : 'tellen'} als nodig. Tik een product om het zelf in te delen.`),
+      S.ai ? btn('Laat de AI indelen', () => run(async () => { const r = await api('budget/label', {}); toast(`${r.labeled} producten ingedeeld.`); await loadBudget(); }, { reload: false }), 'small secondary') : null) : null,
+    b.coverage < 1 ? el('p', { class: 'hint' }, `Van ${pctOf(1 - b.coverage, 1)} van het bedrag zijn de producten nog niet bekend; Weekmand haalt die bonnen rustig op.`) : null));
+
+  // Per categorie, uitklapbaar naar de producten.
+  const catMax = Math.max(...b.categories.map(c => c.cents), 1);
+  parts.push(el('section', { class: 'card' }, el('h3', {}, 'Per categorie'),
+    b.categories.length ? b.categories.map(c => categoryRow(c, catMax)) : el('p', { class: 'hint' }, 'Nog niets uitgegeven in deze periode.')));
+
+  // Per winkel.
+  const shops = b.shops.filter(s => s.cents).map(s => [s.name, s.cents]);
+  if (shops.length > 1) {
+    const shopMax = Math.max(...shops.map(([, c]) => c), 1);
+    parts.push(el('section', { class: 'card' }, el('h3', {}, 'Per winkel'),
+      shops.map(([name, cents]) => el('div', { class: 'cat' }, el('div', { class: 'cat-head' }, el('span', { class: 'cat-name' }, name),
+        el('span', { class: 'muted small' }, pctOf(cents, b.totalCents)), el('b', {}, money(cents)),
+        el('span', { class: 'cat-bar' }, sized(el('span'), 'width', cents / shopMax * 100)))))));
+  }
+
+  // Waar het meeste geld heen gaat.
+  if (b.products.length) {
+    parts.push(el('section', { class: 'card' }, el('h3', {}, 'Meest uitgegeven aan'),
+      el('div', {}, b.products.slice(0, 10).map(productRow)),
+      b.products.length > 10 ? el('details', { class: 'more-list' }, el('summary', {}, `Alle ${b.products.length} producten`),
+        searchBox('budget-products', 'Zoek een product'), el('div', { id: 'budget-products' }, b.products.map(productRow))) : null));
+  }
+
+  if (b.priceChanges.length) {
+    parts.push(el('section', { class: 'card' }, el('h3', {}, 'Duurder geworden'),
+      el('p', { class: 'hint' }, 'Prijs per stuk bij de laatste aankoop, tegenover de eerste in het jaar ervoor.'),
+      b.priceChanges.map(p => el('div', { class: 'prod-row' }, el('span', { class: 'grow' }, p.name, el('span', { class: 'muted small' }, ` · ${money(p.from.unit)} → ${money(p.to.unit)}`)),
+        el('span', { class: 'pill op' }, `+${p.percent}%`)))));
+  }
+
+  // Alle aankopen in deze periode.
+  parts.push(el('section', { class: 'card' }, el('h3', {}, 'Aankopen'),
+    b.purchases.length ? [searchBox('budget-purchases', 'Zoek een aankoop'), el('div', { id: 'budget-purchases' }, b.purchases.map(purchaseRow))]
+      : el('p', { class: 'hint' }, 'Geen aankopen in deze periode.')));
+
+  parts.push(expenseCard(b), settingsCard(b));
+  put($('budget'), ...parts);
+  applyListSearch('budget-products');
+  applyListSearch('budget-purchases');
+}
+
+function categoryRow(c, max) {
+  const b = budgetData;
+  const limit = b.limits[c.key];
+  const open = budgetOpenCat === c.key;
+  const fixed = !c.kind; // Kosten en "nog niet uitgesplitst": geen producten om te tonen.
+  const head = el(fixed ? 'div' : 'button', {
+    type: fixed ? undefined : 'button', class: 'cat-head', 'aria-expanded': fixed ? undefined : String(open),
+    onclick: fixed ? undefined : () => { budgetOpenCat = open ? null : c.key; renderBudget(); },
+  },
+  el('span', { class: 'cat-name' }, c.label),
+  el('span', { class: 'muted small' }, pctOf(c.cents, b.totalCents)),
+  el('b', {}, money(c.cents)),
+  el('span', { class: 'cat-bar' + (c.kind === 'extra' ? ' extra' : '') + (limit && c.cents > limit ? ' over' : '') }, sized(el('span'), 'width', c.cents / max * 100)),
+  limit ? el('span', { class: 'cat-limit small ' + (c.cents > limit ? 'warn' : 'muted') }, c.cents > limit ? `${money(c.cents - limit)} boven de limiet van ${money(limit)}` : `Limiet ${money(limit)} · nog ${money(limit - c.cents)}`) : null);
+  if (!open) return el('div', { class: 'cat' }, head);
+  const items = b.products.filter(p => p.category === c.key);
+  return el('div', { class: 'cat open' }, head, el('div', { class: 'cat-body' },
+    items.length ? items.slice(0, 25).map(productRow) : el('p', { class: 'hint' }, 'Geen producten met een bekende prijs in deze periode.'),
+    items.length > 25 ? el('p', { class: 'hint' }, `En nog ${items.length - 25} andere.`) : null,
+    limitForm(c)));
+}
+
+function productRow(p) {
+  return el('button', { type: 'button', class: 'prod-row', onclick: () => labelDialog(p.name, p.category, p.kind) },
+    el('span', { class: 'grow' }, p.name, el('span', { class: 'muted small' }, ` · ${num.format(p.quantity)}×`)),
+    p.kind === 'extra' ? el('span', { class: 'pill low' }, 'extra') : p.kind === 'geen-eten' ? el('span', { class: 'pill' }, 'geen eten') : null,
+    p.bonusCents ? el('span', { class: 'pill bonus', title: `${money(p.bonusCents)} bonuskorting` }, 'bonus') : null,
+    p.by ? null : el('span', { class: 'pill', title: 'Nog niet ingedeeld' }, '?'),
+    el('b', {}, money(p.cents)));
+}
+
+function labelDialog(name, category, kind) {
+  const cats = budgetData.categoryList;
+  const cat = el('select', {}, cats.map(c => el('option', { value: c.key, selected: c.key === category || undefined }, c.label)));
+  const sort = el('select', {}, kindOptions.map(([value, label]) => el('option', { value, selected: value === kind || undefined }, label)));
+  cat.onchange = () => { sort.value = cats.find(c => c.key === cat.value)?.kind ?? 'nodig'; };
+  dialog(name, el('div', { class: 'stack' },
+    el('p', { class: 'hint' }, 'Zo telt dit product voortaan mee, ook in eerdere weken en maanden.'),
+    el('label', {}, 'Categorie', cat),
+    el('label', {}, 'Nodig of extra', sort),
+    el('div', { class: 'row' },
+      btn('Opslaan', () => { closeDialog(); run(async () => { await api('budget/product', { name, category: cat.value, kind: sort.value }); toast('Opgeslagen.'); await loadBudget(); }, { reload: false }); }, 'primary'),
+      btn('Annuleren', closeDialog, 'ghost'))));
+}
+
+function limitForm(c) {
+  const current = budgetData.monthLimits?.[c.key];
+  const input = el('input', { type: 'number', min: '0', step: '1', inputmode: 'decimal', placeholder: 'Geen limiet', value: current ? String(current / 100) : undefined, 'aria-label': 'Limiet per maand in euro' });
+  return el('form', { class: 'row limit-form', onsubmit: e => {
+    e.preventDefault();
+    run(async () => { await api('budget/settings', { limit: { category: c.key, month: input.value } }); toast(input.value ? 'Limiet opgeslagen.' : 'Limiet verwijderd.'); await loadBudget(); }, { reload: false });
+  } }, el('span', { class: 'small muted' }, 'Limiet per maand €'), el('span', { class: 'grow' }, input), el('button', { class: 'small' }, 'Opslaan'));
+}
+
+function purchaseRow(p) {
+  return el('button', { type: 'button', class: 'prod-row' + (p.excluded ? ' excluded' : ''), onclick: () => run(() => spendDialog(p.id), { reload: false }) },
+    el('span', { class: 'spend-date small' }, shortDate(p.date)),
+    el('span', { class: 'grow' }, p.shop, el('span', { class: 'muted small' }, p.note ? ` · ${p.note}` : p.source === 'manual' ? '' : p.detailed ? ` · ${p.lines} regels` : ' · regels volgen')),
+    p.excluded ? el('span', { class: 'pill' }, 'telt niet mee') : null,
+    el('b', {}, money(p.totalCents)));
+}
+
+async function spendDialog(id) {
+  const s = await api('budget/spend', { id });
+  const shop = s.source === 'picnic' ? 'Picnic' : s.source === 'ah' ? 'Albert Heijn' : s.shop ?? 'Uitgave';
+  const lines = s.lines ?? [];
+  const toggle = (path, data, message) => { closeDialog(); run(async () => { await api(path, data); if (message) toast(message); await loadBudget(); }, { reload: false }); };
+  // AH-bonus: van de bonusregels (nieuw), of het verschil tussen de producten en het totaal (oudere bonnen).
+  const bonus = s.discounts ? -s.discounts.reduce((sum, d) => sum + d.cents, 0)
+    : s.source === 'ah' ? Math.max(0, lines.reduce((sum, l) => sum + l.cents, 0) - s.totalCents) : 0;
+  const saved = (s.savingsCents ?? 0) + bonus;
+  dialog(`${shop}, ${shortDate(s.date)}`, el('div', { class: 'stack' },
+    el('p', {}, el('b', {}, money(s.totalCents)), saved ? ` · ${money(saved)} ${s.source === 'ah' ? 'bonusvoordeel' : 'bespaard'}` : '', s.excluded ? el('span', { class: 'muted' }, ' · telt niet mee') : ''),
+    lines.length ? el('div', { class: 'list' }, lines.map(l => el(l.adjustment ? 'div' : 'button', {
+      type: l.adjustment ? undefined : 'button', class: 'prod-row',
+      onclick: l.adjustment ? undefined : () => labelDialog(l.name, l.category ?? 'overig', l.kind ?? 'nodig'),
+    }, el('span', { class: 'grow' }, `${num.format(l.quantity)}× ${l.name}`),
+    l.bonusCents ? el('span', { class: 'pill bonus', title: 'Bonus: ' + l.bonusNames.join(', ') }, `B −${money(l.bonusCents)}`) : null,
+    l.kind === 'extra' ? el('span', { class: 'pill low' }, 'extra') : l.kind === 'geen-eten' ? el('span', { class: 'pill' }, 'geen eten') : null,
+    el('b', {}, money(l.cents - (l.bonusCents ?? 0))))),
+    ...(s.looseDiscounts ?? []).map(d => el('div', { class: 'prod-row' }, el('span', { class: 'grow muted' }, `Bonus ${d.name}`),
+      el('span', { class: 'pill bonus', title: 'Weekmand weet niet bij welk product deze bonus hoort' }, 'los'), el('b', {}, '−' + money(-d.cents)))),
+    !s.discounts && bonus ? el('div', { class: 'prod-row' }, el('span', { class: 'grow muted' }, 'Bonuskorting (per product volgt bij de volgende ronde)'), el('b', {}, '−' + money(bonus))) : null)
+      : el('p', { class: 'hint' }, s.source === 'manual' ? (budgetData.categoryList.find(c => c.key === s.category)?.label ?? 'Overig') + (s.note ? ` · ${s.note}` : '') : 'De producten van deze aankoop worden nog opgehaald.'),
+    el('div', { class: 'row' },
+      s.source === 'manual'
+        ? btn('Verwijderen', () => toggle('budget/expense/remove', { id }, 'Verwijderd.'), 'danger')
+        : btn(s.excluded ? 'Weer meetellen' : 'Niet meetellen', () => toggle('budget/exclude', { id, excluded: !s.excluded }), 'secondary'),
+      btn('Sluiten', closeDialog, 'ghost'))));
+}
+
+function expenseCard(b) {
+  const date = el('input', { type: 'date', value: b.today, max: b.today, required: true });
+  const amount = el('input', { type: 'text', inputmode: 'decimal', placeholder: '0,00', required: true, autocomplete: 'off' });
+  const shop = el('input', { placeholder: 'Bijv. markt, bakker, Lidl', maxlength: '60' });
+  const cat = el('select', {}, b.categoryList.map(c => el('option', { value: c.key, selected: c.key === 'overig' || undefined }, c.label)));
+  const note = el('input', { placeholder: 'Optioneel', maxlength: '120' });
+  return el('details', { class: 'card' }, el('summary', {}, 'Losse uitgave toevoegen'),
+    el('form', { class: 'stack', onsubmit: e => {
+      e.preventDefault();
+      run(async () => {
+        await api('budget/expense', { date: date.value, amount: amount.value, shop: shop.value, category: cat.value, note: note.value });
+        toast('Uitgave toegevoegd.');
+        await loadBudget();
+      }, { reload: false });
+    } },
+    el('p', { class: 'hint' }, 'Voor boodschappen buiten Picnic en de AH-app om. Een min-bedrag is een terugbetaling.'),
+    el('div', { class: 'grid' }, el('label', {}, 'Datum', date), el('label', {}, 'Bedrag (€)', amount)),
+    el('div', { class: 'grid' }, el('label', {}, 'Winkel', shop), el('label', {}, 'Categorie', cat)),
+    el('label', {}, 'Notitie', note),
+    el('button', { class: 'primary' }, 'Toevoegen')));
+}
+
+function settingsCard(b) {
+  const month = el('input', { type: 'number', min: '10', step: '5', inputmode: 'decimal', value: b.customBudget ? String(b.monthBudget / 100) : undefined, placeholder: `${Math.round(b.monthBudget / 100)} (afgeleid)`, 'aria-label': 'Maandbudget in euro' });
+  const s = b.sync;
+  return el('details', { class: 'card' }, el('summary', {}, 'Budget en gegevens'),
+    el('form', { class: 'stack', onsubmit: e => {
+      e.preventDefault();
+      run(async () => { await api('budget/settings', { month: month.value }); toast(month.value ? 'Budget opgeslagen.' : 'Budget weer afgeleid van je mandbudget.'); await loadBudget(); }, { reload: false });
+    } },
+    el('label', {}, 'Budget per maand voor alle boodschappen (€)', month),
+    el('p', { class: 'hint' }, 'Leeg: afgeleid van je mandbudget per bestelling. Met een eigen budget krijg je een seintje bij 80% en 100%, ook via Telegram. Een limiet per categorie stel je in door de categorie open te tikken.'),
+    el('button', {}, 'Opslaan')),
+    el('div', { class: 'stack sync-info' },
+      el('p', { class: 'small' }, s.at ? `Laatst bijgewerkt ${dateFmt.format(new Date(s.at))} om ${timeFmt.format(new Date(s.at))}.` : 'Nog niet bijgewerkt.',
+        s.pending ? ` Van ${s.pending} van de ${s.total} aankopen haalt Weekmand de producten nog op, een paar per uur.` : ''),
+      ...s.errors.map(e => el('p', { class: 'warn small' }, e)),
+      el('div', { class: 'row' },
+        btn('Nu bijwerken', syncBudget, 'small'),
+        el('a', { href: '/api/budget.csv', download: '', class: 'small' }, 'Alle uitgaven downloaden (CSV)'))));
+}
+
 function renderTelegram() {
   const t = S.telegram;
   const parts = [el('p', { class: 'muted small' }, 'Telegram stuurt je een seintje vóór de Picnic-deadline en je kunt Weekmand er berichten sturen. Vier uur voor de deadline vraagt Weekmand naar twijfelachtige voorraad en laat je de mand goedkeuren.')];
@@ -971,7 +1685,13 @@ function renderTelegram() {
         }, { reload: false }), 'primary small'),
         t.chats.length ? btn('Testbericht', () => run(() => api('telegram/test', {})), 'small') : null,
         btn('Deadline-melding nu proberen', () => run(async () => { await api('cutoff/test', {}); toast('Melding verstuurd.'); }), 'small')),
-      codeArea, ...t.chats.map(c => el('div', { class: 'pantry-item' }, el('span', { class: 'grow small' }, `Chat ${c}`), btn('Ontkoppel', () => run(() => api('telegram/unpair', { chat: c })), 'small'))));
+      codeArea, ...t.chats.map(c => el('div', { class: 'pantry-item' }, el('span', { class: 'grow small' }, c.name ?? `Chat ${c.id}`), btn('Ontkoppel', () => run(() => api('telegram/unpair', { chat: c.id })), 'small'))));
+      if (t.chats.length > 1) {
+        const share = el('select', { 'aria-label': 'Antwoorden delen', onchange: e => run(async () => { await api('telegram/share', { mode: e.target.value }); toast('Opgeslagen.'); }) },
+          ...[['changes', 'Alleen als er iets verandert (voorraad, menu, lijst, mand)'], ['all', 'Alles, ook vragen'], ['off', 'Niets: ieder zijn eigen chat']]
+            .map(([value, label]) => el('option', { value, selected: t.share === value || undefined }, label)));
+        parts.push(el('label', { class: 'stack' }, el('span', { class: 'small' }, 'Antwoorden van de bot ook naar de andere chats (en wat je in de webapp-chat vraagt)'), share));
+      }
     }
   }
   put($('telegram'), ...parts);
@@ -1079,6 +1799,6 @@ async function start() {
       el('div', { class: 'row' }, btn(`Ja, ${name.toLowerCase()} is op`, () => { closeDialog(); run(async () => { await api('pantry/out', { name: op }); toast(`${name} genoteerd.`); }); }, 'primary'), btn('Annuleren', closeDialog)));
   }
   const tab = location.hash.slice(1);
-  if (['week', 'cart', 'pantry', 'recipes', 'chat', 'more'].includes(tab)) showTab(tab);
+  if (['week', 'cart', 'pantry', 'budget', 'recipes', 'chat', 'more'].includes(tab)) showTab(tab);
 }
 start();

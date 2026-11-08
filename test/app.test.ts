@@ -221,6 +221,43 @@ test('gedeeld overzicht: hergebruikt tot er iets verandert of het te oud is', as
   assert.notEqual((await app.currentPlan()).id, changed.id, 'na 10 minuten opnieuw berekend');
 });
 
+test('gedeeld overzicht: overslaan is lokaal en leest de mand niet opnieuw', async () => {
+  const { app, clock } = makeApp();
+  await app.proposeMenu();
+  let reads = 0;
+  const read = app.mock.readCart.bind(app.mock);
+  app.mock.readCart = async () => { reads++; return read(); };
+  const first = await app.currentPlan();
+  assert.equal(reads, 1);
+  const line = first.lines.find(l => l.add)!;
+  app.declineLine(line.productId);
+  const after = await app.currentPlan();
+  assert.equal(reads, 1, 'overslaan: geen nieuwe lezing van de mand');
+  assert.ok(after.lines.find(l => l.productId === line.productId)?.declined);
+  assert.notEqual(after.id, first.id);
+  await app.cart();
+  assert.equal(reads, 1, 'de mandlijst gebruikt dezelfde lezing');
+  await app.addItems([{ name: 'krat pils' }]);
+  assert.ok((await app.currentPlan()).lines.find(l => l.productId === line.productId)?.declined, 'iets toevoegen haalt weggeveegde regels niet terug');
+  // Een berekening die liep vóór een wijziging mag die wijziging niet missen.
+  app.undoDecline(line.productId);
+  const running = app.currentPlan();
+  app.declineLine(line.productId);
+  const latest = await app.currentPlan();
+  await running;
+  assert.ok(latest.lines.find(l => l.productId === line.productId)?.declined, 'nieuwste wijziging zit erin');
+  // Doorvoeren leest vers en daarna opnieuw; het nieuwste overzicht is het bewaarde.
+  const before = reads;
+  await app.applyPlan(latest.id);
+  assert.ok(reads > before, 'doorvoeren leest de mand vers');
+  const n = reads;
+  await app.currentPlan();
+  assert.equal(reads, n + 1, 'na doorvoeren opnieuw gelezen');
+  clock.now += 11 * 60_000;
+  await app.currentPlan();
+  assert.equal(reads, n + 2, 'een lezing ouder dan 10 minuten wordt ververst');
+});
+
 test('voorraad opnieuw opbouwen uit de laatste levering', async () => {
   const { app, clock } = makeApp();
   app.setShopMode('picnic');
@@ -244,4 +281,16 @@ test('voorraad opnieuw opbouwen uit de laatste levering', async () => {
   assert.equal(app.store.pantryItem('melk')!.amount, 6000);
   assert.equal(app.store.pantryItem('melk')!.minimum, 2000, 'minimum blijft');
   assert.equal(app.store.pantryItem('rijst')!.amount, null, 'niet in de levering → onbekend');
+});
+
+test('voorraad: wat al in de mand ligt telt niet als tekort', async () => {
+  const { app } = makeApp();
+  await app.setMeal({ date: '2026-11-11', recipeId: 'shakshuka', servings: 2 });
+  const before = (await app.pantryStatus()).items.filter(i => i.neededThisOrder > 0);
+  assert.ok(before.length && before.every(i => i.inCart === 0), 'nog niets in de mand');
+  await app.applyPlan((await app.plan()).id);
+  await app.currentPlan();
+  const after = (await app.pantryStatus()).items.filter(i => i.neededThisOrder > 0);
+  const short = after.filter(i => (i.amount ?? 0) + i.inCart < i.neededThisOrder);
+  assert.deepEqual(short.map(i => i.key), [], 'alles ligt nu in de mand');
 });

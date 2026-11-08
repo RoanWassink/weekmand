@@ -44,7 +44,7 @@ export type RecipeDef = {
   steps: string;
 };
 
-export type Recipe = RecipeDef & { source: 'builtin' | 'user' | 'ai' | 'picnic' };
+export type Recipe = RecipeDef & { source: 'builtin' | 'user' | 'ai' | 'picnic' | 'web' };
 
 export type Household = {
   adults: number;
@@ -96,7 +96,16 @@ export type ShopProduct = {
   tiers?: { from: number; cents: number }[];
   /** Aanbiedingslabel, bijv. '1+1 gratis'. */
   promo?: string;
+  /** Afbeelding-id van de productfoto bij Picnic. */
+  image?: string;
+  /** Prijs per kilo of liter zoals de winkel die toont, bijv. '€7,96/l'. */
+  unitPrice?: string;
+  /** Merk, bijv. 'Campina'. */
+  brand?: string;
 };
+
+/** Een product met wat de productpagina van de winkel erover zegt. */
+export type ProductDetails = ShopProduct & { description?: string; labels?: string[] };
 
 export type CartLine = ShopProduct & { quantity: number };
 

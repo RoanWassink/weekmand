@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import type { Spend } from './budget.ts';
 import type { IngredientDef, Meal, PantryItem, Recipe } from './types.ts';
 
 export type ProductLink = {
@@ -28,6 +29,8 @@ CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY, channel TEXT NOT NULL, 
 CREATE INDEX IF NOT EXISTS chat_channel ON chat(channel, id);
 CREATE TABLE IF NOT EXISTS notified (key TEXT PRIMARY KEY, at TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS ratings (date TEXT PRIMARY KEY, recipe_id TEXT NOT NULL, rating INTEGER NOT NULL, reason TEXT, at TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS spending (id TEXT PRIMARY KEY, source TEXT NOT NULL, date TEXT NOT NULL, total_cents INTEGER NOT NULL, detailed INTEGER NOT NULL, body TEXT NOT NULL) STRICT;
+CREATE INDEX IF NOT EXISTS spending_date ON spending(date);
 `;
 export type Rating = { date: string; recipeId: string; rating: 1 | -1; reason: string | null; at: string };
 
@@ -227,6 +230,29 @@ export class Store {
     this.#run('DELETE FROM chat WHERE channel = ? AND id NOT IN (SELECT id FROM chat WHERE channel = ? ORDER BY id DESC LIMIT 40)', channel, channel);
   }
   clearChat(channel: string) { this.#run('DELETE FROM chat WHERE channel = ?', channel); }
+
+  // Uitgaven (budget): bezorgingen, kassabonnen en losse uitgaven
+  #spend(row: Row): Spend { return { ...JSON.parse(String(row.body)), id: String(row.id), source: row.source as Spend['source'], date: String(row.date), totalCents: Number(row.total_cents) }; }
+  spends(from: string, to: string): Spend[] {
+    return this.#all('SELECT * FROM spending WHERE date >= ? AND date <= ? ORDER BY date', from, to).map(r => this.#spend(r));
+  }
+  spend(id: string): Spend | null { const row = this.#get('SELECT * FROM spending WHERE id = ?', id); return row ? this.#spend(row) : null; }
+  saveSpend(s: Spend) {
+    const { id, source, date, totalCents, ...body } = s;
+    this.#run('INSERT INTO spending (id, source, date, total_cents, detailed, body) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET source = excluded.source, date = excluded.date, total_cents = excluded.total_cents, detailed = excluded.detailed, body = excluded.body',
+      id, source, date, Math.round(totalCents), s.lines ? 1 : 0, JSON.stringify(body));
+  }
+  deleteSpend(id: string) { this.#run('DELETE FROM spending WHERE id = ?', id); }
+  /** Welke aankopen er al zijn (en of hun regels bekend zijn), zonder alles in te lezen. */
+  spendIndex(source: Spend['source']): Map<string, { date: string; detailed: boolean; discounts: boolean }> {
+    return new Map(this.#all("SELECT id, date, detailed, json_type(body, '$.discounts') IS NOT NULL AS discounts FROM spending WHERE source = ?", source)
+      .map(r => [String(r.id), { date: String(r.date), detailed: !!r.detailed, discounts: !!r.discounts }]));
+  }
+  /** Totalen per dag, voor grafieken over lange tijd. */
+  spendTotals(from: string, to: string): { date: string; cents: number }[] {
+    return this.#all('SELECT date, SUM(total_cents) AS cents FROM spending WHERE date >= ? AND date <= ? GROUP BY date ORDER BY date', from, to).map(r => ({ date: String(r.date), cents: Number(r.cents) }));
+  }
+  firstSpendDate(): string | null { const row = this.#get('SELECT MIN(date) AS d FROM spending'); return row?.d ? String(row.d) : null; }
 
   // Eenmalige meldingen
   wasNotified(key: string) { return !!this.#get('SELECT 1 FROM notified WHERE key = ?', key); }

@@ -22,6 +22,7 @@ test('server: wachtwoord, API-token, CSRF en webapp', async t => {
   const page = await fetch(base + '/');
   assert.equal(page.status, 200);
   assert.match(await page.text(), /<title>Weekmand<\/title>/);
+  assert.match(page.headers.get('content-security-policy') ?? '', /img-src 'self' blob: data: https:\/\/storefront-prod\.nl\.picnicinternational\.com;/, "productfoto's van Picnic");
   for (const asset of ['/app.js', '/barcode.js', '/style.css', '/manifest.webmanifest', '/icon.svg']) {
     assert.equal((await fetch(base + asset, { headers: basic })).status, 200, asset);
   }
@@ -33,7 +34,7 @@ test('server: wachtwoord, API-token, CSRF en webapp', async t => {
   const rpc = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
   assert.equal((await fetch(base + '/mcp', { method: 'POST', headers: json, body: rpc })).status, 401);
   const listed = await fetch(base + '/mcp', { method: 'POST', headers: { ...json, Authorization: 'Bearer test-token-1234567890' }, body: rpc });
-  assert.equal((await listed.json()).result.tools.length, 22);
+  assert.equal((await listed.json()).result.tools.length, 28);
   assert.equal((await fetch(base + '/mcp', { method: 'POST', headers: { ...json, Authorization: 'Bearer fout' }, body: rpc })).status, 401);
 
   // Verzoeken vanaf een andere website worden geweigerd.

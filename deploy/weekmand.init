@@ -15,5 +15,8 @@ start_service() {
   procd_set_param env HOST=127.0.0.1 PORT=8080 DB_PATH="$root/data/weekmand.sqlite"
   procd_set_param user nobody
   procd_set_param respawn 3600 5 5
+  # Meldingen en fouten van Weekmand in het systeemlog (logread).
+  procd_set_param stdout 1
+  procd_set_param stderr 1
   procd_close_instance
 }

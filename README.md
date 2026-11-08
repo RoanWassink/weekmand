@@ -6,6 +6,7 @@ Weekmand is een lokale boodschappenassistent voor een huishouden dat bij Picnic 
   <img src="docs/screenshots/week.png" alt="Weekmenu" width="240">
   <img src="docs/screenshots/mand.png" alt="Mand met voorgestelde wijzigingen" width="240">
   <img src="docs/screenshots/voorraad.png" alt="Voorraad" width="240">
+  <img src="docs/screenshots/budget.png" alt="Budget" width="240">
 </p>
 
 Meer details: [docs/DETAILS.md](docs/DETAILS.md).
@@ -27,7 +28,12 @@ Onder **Meer** in de app:
 - Maak een account aan.
 - **Winkel en Picnic**: meld je aan met de sms-code en vink **Sessie onthouden** aan, zodat de deadline-melding ook na een herstart werkt.
 - **AI-aanbieder** (optioneel): Claude, OpenAI, Mistral, DeepSeek of een lokaal model.
-- **Telegram-meldingen** (optioneel): maak een bot bij @BotFather en koppel die met een koppelcode.
+- **Albert Heijn** (optioneel): voor boodschappen in de winkel. Weekmand zet je boodschappen op Mijn lijst in de AH-app en telt je kassabonnen bij de voorraad.
+- **Telegram-meldingen** (optioneel): maak een bot bij @BotFather en koppel die met een koppelcode. Ieder in huis kan een eigen chat koppelen; wat de bot in de ene chat verandert, lezen de anderen mee.
+
+De tab **Budget** laat zien wat je echt uitgaf (Picnic, AH-kassabonnen en losse uitgaven) per week, maand en jaar, per categorie en nodig tegenover extra.
+
+Stap-voor-stap uitleg voor AI-sleutels (Mistral, DeepSeek, OpenAI, Claude) en de Telegram-bot: [docs/KOPPELEN.md](docs/KOPPELEN.md).
 
 Instellingen kun je ook in een `.env`-bestand zetten; zie `.env.example`.
 
@@ -37,8 +43,8 @@ Naar een NanoPi R4S met OpenWrt uitrollen doe je met `deploy/Update-Weekmand.ps1
 
 Elke week:
 
-1. **Week**: maak het weekmenu, kies het bezorgmoment en keur het goed.
-2. **Mand**: bekijk de boodschappen die Weekmand heeft berekend en klik op **Naar Picnic sturen**. Wat je zelf in de Picnic-mand hebt gelegd, blijft staan.
+1. **Week**: maak het weekmenu, kies het bezorgmoment en keur het goed. Vink gerechten aan die je hebt gekookt, of vervang ze door **Ander gerecht**.
+2. **Mand**: bekijk de boodschappen (met productfoto's) die Weekmand heeft berekend en klik op **Wijzigingen naar Picnic sturen**. Wat je zelf in de Picnic-mand hebt gelegd, blijft staan.
 3. Rond de bestelling af en betaal in de Picnic-app.
 4. **Voorraad**: klik op **is op** als iets op is, of scan de barcode van het product.
 5. **Recepten**: geef gerechten een duimpje omhoog of omlaag, zodat het volgende menu beter past.

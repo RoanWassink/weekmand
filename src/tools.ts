@@ -107,7 +107,7 @@ export const tools: Tool[] = [
       day, recipe_id: str('Bestaand recept-ID.'), servings: num('Aantal porties.'), note: str('Opmerking, bijv. "visite".'),
       recipe: obj({
         name: str('Naam van het gerecht.'), tags: { type: 'array', items: { type: 'string' } }, minutes: { type: 'integer' }, steps: str('Korte bereiding.'),
-        ingredients: { type: 'array', minItems: 1, items: obj({ name: str('Ingrediënt.'), amount: num('Per portie.'), unit: str('g, kg, ml, l, el, tl of st.') }, ['name', 'amount', 'unit']) },
+        ingredients: { type: 'array', minItems: 1, items: obj({ name: str('Ingrediënt; gebruik bij voorkeur een gewone naam (kippenpoten, tijm), geen omschrijving.'), amount: num('Per portie.'), unit: str('g, kg, ml, l, el, tl of st.'), category: { type: 'string', enum: ['groente-fruit', 'aardappel', 'vlees', 'vis', 'vega', 'zuivel-eieren', 'kaas', 'brood', 'pasta-rijst', 'conserven', 'kruiden-sauzen', 'olie-azijn', 'bakken', 'diepvries', 'drinken', 'ontbijt', 'snacks', 'huishouden'] } }, ['name', 'amount', 'unit']) },
       }, ['name', 'ingredients']),
     }, ['day']),
     run: async (app, a) => {
@@ -121,6 +121,12 @@ export const tools: Tool[] = [
     description: 'Vervang het gerecht op een dag door een ander voorstel, optioneel met een wens. Telt als afwijzing (Weekmand leert daarvan).',
     input: obj({ day, preferences: str('Wens voor het nieuwe gerecht.') }, ['day']),
     run: async (app, a) => app.swapMeal(date(app, a.day), a.preferences ?? ''),
+  },
+  {
+    name: 'adapt_meal', title: 'Gerecht aanpassen of vervangen',
+    description: 'Vervang het gerecht op een dag volgens een opmerking: een aanpassing ("met kippenpoten in plaats van kippenbouten", "zonder paprika", "voor 6 personen pittiger") of een wens ("iets vegetarisch"). Weekmand maakt een aangepast recept en zet het op die dag; het oude recept blijft in de receptenlijst. Gebruik dit in plaats van zelf een recept te bedenken als de gebruiker een bestaand gerecht wil veranderen. Daarna add_to_cart om de mand opnieuw te berekenen.',
+    input: obj({ day, note: str('Wat er anders moet.') }, ['day', 'note']),
+    run: async (app, a) => ({ replaced: await app.replaceMeals({ dates: [date(app, a.day)], note: a.note }) }),
   },
   {
     name: 'remove_meal', title: 'Maaltijd schrappen', description: 'Haal de maaltijd van een dag van het menu (bijv. uit eten).',
@@ -137,6 +143,16 @@ export const tools: Tool[] = [
     description: 'Zoek recepten op naam, ingrediënt of tag (vegetarisch, vis, kip, mexicaans, italiaans, aziatisch, snel, kindvriendelijk, feest, soep …).',
     input: obj({ query: str('Zoekwoord.'), tag: str('Tag.') }),
     run: async (app, a) => app.listRecipes(a.query ?? '', a.tag ?? '').slice(0, 25).map(r => ({ id: r.id, name: r.name, tags: r.tags, minutes: r.minutes, allowed: r.allowed, per_portion: euro(r.costPerPortionCents) })),
+  },
+  {
+    name: 'import_recipe', title: 'Recept van een website importeren',
+    description: 'Haal een recept op van een receptwebsite (link) en sla het op in Weekmand, met hoeveelheden per persoon. Werkt voor sites met schema.org-receptgegevens (bijna alle grote receptsites). Daarna kan het met set_meal op het menu.',
+    input: obj({ url: str('Link naar de receptpagina.') }, ['url']),
+    run: async (app, a) => {
+      const preview = await app.previewRecipeFromUrl(a.url);
+      const recipe = app.saveImportedRecipe(preview);
+      return { recipe_id: recipe.id, name: recipe.name, minutes: recipe.minutes, ingredients: recipe.ingredients.length, skipped: preview.lines.filter(l => l.status === 'overgeslagen').map(l => `${l.original} (${l.note})`), new_ingredients: preview.lines.filter(l => l.status === 'nieuw').map(l => l.name) };
+    },
   },
   {
     name: 'get_recipe', title: 'Recept bekijken', readOnly: true, description: 'Ingrediënten en bereiding van een recept, voor een aantal porties.',
@@ -166,13 +182,24 @@ export const tools: Tool[] = [
     name: 'add_to_cart', title: 'Boodschappen berekenen en toevoegen',
     description: 'Zet optioneel extra producten op de lijst (bijv. "krat pils", of "500 g gehakt") en bereken het verschil tussen wat nodig is (menu, vaste boodschappen, extra\'s, min voorraad) en de huidige Picnic-mand. Past NIETS toe: laat de gebruiker de wijzigingen zien en roep pas na akkoord confirm_cart_update aan met het review_id.',
     input: obj({
-      items: { type: 'array', maxItems: 25, items: obj({ name: str('Product, bijv. "krat pils".'), quantity: { type: 'integer', minimum: 1, maximum: 50 }, amount: num('Hoeveelheid voor een ingrediënt.'), unit: str('Eenheid bij amount.') }, ['name']) },
+      items: { type: 'array', maxItems: 25, items: obj({ name: str('Product, bijv. "krat pils".'), product_id: str('Het id uit search_products als de gebruiker precies dat product wil.'), quantity: { type: 'integer', minimum: 1, maximum: 50 }, amount: num('Hoeveelheid voor een ingrediënt.'), unit: str('Eenheid bij amount.') }, ['name']) },
     }),
     run: async (app, a, ctx) => {
-      const added = a.items?.length ? await app.addItems(a.items) : [];
+      const added = a.items?.length ? await app.addItems(a.items.map((i: any) => ({ ...i, productId: i.product_id }))) : [];
       const plan = await app.plan();
       if (plan.lines.some(l => l.add || l.remove)) ctx.pendingReview?.(plan.id);
       return { added, ...planSummary(plan) };
+    },
+  },
+  {
+    name: 'link_product', title: 'Ingrediënt aan een product koppelen',
+    description: 'Koppel een ingrediënt uit het menu aan een product van de winkel. Gebruik dit als missing_products een ingrediënt zonder product noemt, of als de gebruiker voor een ingrediënt een ander product wil ("neem kippenpoten voor de kip"). product_id komt uit search_products. Is het ingrediënt in stuks en het product in gram (of andersom), geef dan per_pack: hoeveel van het ingrediënt één verpakking dekt (bijv. 650 g kippenpoten = 3 stuks). Berekent daarna de mand opnieuw; toepassen gaat via de knop.',
+    input: obj({ ingredient: str('Het ingrediënt, zoals in missing_products of het recept.'), product_id: str('Het id uit search_products.'), product_name: str('De productnaam uit search_products.'), per_pack: num('Hoeveel van het ingrediënt (in zijn eigen eenheid) één verpakking dekt.') }, ['ingredient', 'product_id']),
+    run: async (app, a, ctx) => {
+      const link = await app.linkProductFor(a.ingredient, a.product_id, { productName: a.product_name, perPack: a.per_pack });
+      const plan = await app.plan();
+      if (plan.lines.some(l => l.add || l.remove)) ctx.pendingReview?.(plan.id);
+      return { linked: `${link.name} (${link.unitQuantity}) voor ${a.ingredient}`, ...planSummary(plan) };
     },
   },
   {
@@ -201,6 +228,37 @@ export const tools: Tool[] = [
       return {
         shop: cart.shop, total: euro(cart.totalCents), cut_off: delivery.cutOff, hours_left: delivery.hoursLeft,
         lines: cart.lines.map(l => ({ product: l.name, pack: l.unitQuantity, quantity: l.quantity, price: euro(l.cents), added_by_weekmand: l.byWeekmand || undefined })),
+      };
+    },
+  },
+  {
+    name: 'send_to_ah_list', title: 'Op de AH-boodschappenlijst zetten',
+    description: 'Zet boodschappen op "Mijn lijst" in de Albert Heijn-app, voor wie zelf naar de AH-winkel gaat (zelfscanner). Zonder items: alles wat Weekmand nog wil kopen. Met items: alleen die teksten, bijv. ["melk", "2 komkommers"]. Wat al op de lijst staat wordt overgeslagen. Raakt de Picnic-mand niet.',
+    input: obj({ items: { type: 'array', items: { type: 'string' }, description: 'Optioneel: losse boodschappen als tekst.' } }),
+    run: async (app, a) => app.sendToAhList(Array.isArray(a.items) && a.items.length ? { ids: [], extra: a.items } : {}),
+  },
+  {
+    name: 'import_ah_receipts', title: 'AH-kassabonnen ophalen',
+    description: 'Haal nieuwe kassabonnen van het gekoppelde AH-account op en tel de gekochte producten bij de voorraad. Elke bon telt één keer.',
+    input: obj({}),
+    run: async app => app.importAhReceipts(),
+  },
+  {
+    name: 'get_budget', title: 'Uitgaven en budget', readOnly: true,
+    description: 'Wat het huishouden aan boodschappen uitgaf (Picnic, AH-kassabonnen, losse uitgaven) in een week, maand of jaar: totaal tegenover het budget, per categorie, nodig tegenover extra (snacks, alcohol), per winkel, grootste posten en wat duurder werd.',
+    input: obj({ period: { type: 'string', enum: ['week', 'month', 'year'] }, back: num('Hoeveel perioden terug: 0 = deze, 1 = vorige.') }),
+    run: async (app, a) => {
+      const b = app.budgetOverview({ period: a.period ?? 'month', offset: -Math.abs(Number(a.back) || 0) });
+      return {
+        period: b.range.label, spent: euro(b.totalCents), budget: euro(b.budget), left: euro(b.budget - b.totalCents),
+        forecast: b.forecastCents === null ? null : euro(b.forecastCents), previous: `${b.previousLabel}: ${euro(b.previousCents)}`,
+        savedWithOffers: euro(b.savingsCents), perPersonPerDay: euro(b.perPersonDayCents), purchases: b.count,
+        notYetSplit: b.coverage < 1 ? `${Math.round((1 - b.coverage) * 100)}% van het bedrag is nog niet per product bekend` : null,
+        byShop: { Picnic: euro(b.bySource.picnic), 'Albert Heijn': euro(b.bySource.ah), overig: euro(b.bySource.manual) },
+        byCategory: b.categories.map(c => `${c.label}: ${euro(c.cents)}`),
+        byKind: b.kinds.map(k => `${k.label}: ${euro(k.cents)}`),
+        topProducts: b.products.slice(0, 8).map(p => `${p.name}: ${euro(p.cents)}`),
+        moreExpensive: b.priceChanges.slice(0, 5).map(p => `${p.name}: ${euro(p.from.unit)} → ${euro(p.to.unit)} (+${p.percent}%)`),
       };
     },
   },

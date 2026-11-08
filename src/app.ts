@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { Catalog, normalize } from './catalog.ts';
+import { Catalog, normalize, slug } from './catalog.ts';
 import type { Feedback, ProductLink, Store } from './db.ts';
 import { check, Problem } from './errors.ts';
 import { detectHabits, ruleId } from './learn.ts';
@@ -11,9 +11,16 @@ import type { Secrets } from './secrets.ts';
 import { applyChange, MockShop, PicnicShop, quantityOf } from './shop.ts';
 import type { Shop } from './shop.ts';
 import { addDays, dayName, isoWeek, localDate, weekday, weekdays } from './time.ts';
-import type { AvoidRule, BaseUnit, DeliverySlot, Household, IngredientDef, Meal, PantryItem, Recipe, ShopCart, ShopProduct } from './types.ts';
-import { convert, formatAmount, packAmount, parseUnitQuantity, toBase } from './units.ts';
+import type { AvoidRule, BaseUnit, Category, DeliverySlot, Household, IngredientDef, Meal, PantryItem, Recipe, ShopCart, ShopProduct } from './types.ts';
+import { convert, euro, formatAmount, packAmount, parseUnitQuantity, toBase } from './units.ts';
+import { adjustmentLine, bonusPerLine, budgetCategories, budgetFor, categoryFromCatalog, categoryKeys, kindKeys, kindOf, labelKey, matchDiscounts, periodRange, priceChanges, ruleCategory, summarize, toCsv } from './budget.ts';
+import type { BudgetCategory, Period, ProductLabel, ReceiptPhoto, Spend, SpendKind, SpendSource } from './budget.ts';
+import type { ImageInput } from './ai.ts';
 import { importPicnicRecipes } from './picnic-recipes.ts';
+import { AH_LOGIN_URL, AlbertHeijn } from './ah.ts';
+import type { AhDiscount, AhReceiptLine } from './ah.ts';
+import { extractRecipe, fetchPage, previewRecipe, recipeFromText } from './recipe-import.ts';
+import type { Preview } from './recipe-import.ts';
 
 export const defaultHousehold: Household = { adults: 2, children: 0, toddlers: 0, budget: 80, vegetarian: false, exclude: [], days: 5 };
 type Ledger = { cartId: string; lines: Record<string, number> };
@@ -21,6 +28,33 @@ type StoredReview = { id: string; createdAt: number; plan: Plan; done?: boolean 
 export type Notice = { text: string; buttons?: { label: string; data: string }[]; key?: string };
 
 const day = 86_400_000;
+
+/** Regels op een kassabon die geen boodschappen zijn. */
+const notGroceries = /statiegeld|emballage|zegel|airmiles|air miles|bonus|korting|draagtas|\btas\b|cadeaukaart|toeslag|retour/i;
+/** 'AH HALFVOLLE MELK 1L' → 'halfvolle melk': merk en maat eraf, zodat de catalogus het herkent. */
+export function receiptName(name: string) {
+  return name.toLowerCase().replace(/^(ah basic|ah excellent|ah biologisch|ah bio|ah terra|g'woon|ah)\s+/, '')
+    .replace(/\b\d+(?:[.,]\d+)?\s*(?:x\s*\d+\s*)?(g|gr|gram|kg|ml|cl|l|ltr|liter|st|stuks?)\b/g, ' ')
+    .replace(/\d+/g, ' ').replace(/\b[a-z]\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+export type AhReceiptLog = { id: string; date: string; total: number | null; counted: string[]; unmatched: string[]; ignored?: string[] };
+/** Wat Weekmand over een bonregel heeft geleerd: een ingrediënt (met inhoud per stuk) of null = geen boodschap. */
+export type ReceiptAlias = { key: string | null; amount?: number; by: 'ai' | 'user' };
+export type ReceiptMatch = { receipt: string; kind: 'existing' | 'new' | 'ignore' | 'unknown'; key?: string; name?: string; unit?: string; category?: string; amount?: number };
+/** null: er is geen AI gekoppeld. */
+export type ReceiptMatcher = (lines: string[], ingredients: { key: string; name: string; unit: BaseUnit }[]) => Promise<ReceiptMatch[] | null>;
+export const receiptKey = (name: string) => name.trim().toLowerCase().replace(/\s+/g, ' ');
+/** null: er is geen AI gekoppeld. */
+/** Een recept zoals de AI het teruggeeft, klaar voor catalog.addRecipe. */
+export type AdaptedRecipe = { name: string; minutes?: number; steps?: string; tags?: string[]; ingredients: { name: string; amount: number; unit: string; category?: string }[] };
+/** Past een recept aan volgens een opmerking; null: geen AI gekoppeld. */
+export type RecipeAdapter = (recipe: { name: string; minutes: number; steps: string; tags: string[]; ingredients: { name: string; amount: number; unit: string }[] }, note: string) => Promise<AdaptedRecipe | null>;
+export type ProductClassifier = (names: string[]) => Promise<{ name: string; category: BudgetCategory; kind: SpendKind }[] | null>;
+type BudgetPrefs = { monthCents?: number; limits?: Partial<Record<BudgetCategory, number>> };
+/** De laatste mandberekening met de Picnic-mand waarmee hij gemaakt is, voor na een herstart. */
+type PlanSnapshot = { at: number; shopMode: 'mock' | 'picnic'; plan: Awaited<ReturnType<Weekmand['plan']>>; cart: ShopCart; cartAt: number };
+const categories: Category[] = ['groente-fruit', 'aardappel', 'vlees', 'vis', 'vega', 'zuivel-eieren', 'kaas', 'brood', 'pasta-rijst', 'conserven', 'kruiden-sauzen', 'olie-azijn', 'bakken', 'diepvries', 'drinken', 'ontbijt', 'snacks', 'huishouden'];
+
 
 /** Productnaam zonder maat: 'Kippendijfilet 800 g' en 'Kippendijfilet 400 g' zijn hetzelfde product. */
 export function baseName(name: string) {
@@ -34,17 +68,34 @@ export class Weekmand {
   readonly catalog: Catalog;
   readonly mock: MockShop;
   readonly picnic: PicnicShop;
+  readonly ah: AlbertHeijn;
   readonly events = new EventEmitter();
   now: () => number;
   #slots: { at: number; slots: DeliverySlot[] } | null = null;
   #searchCache = new Map<string, ShopProduct>();
   #generation = 0;
   #planCache: { plan: Awaited<ReturnType<Weekmand['plan']>>; at: number; generation: number } | null = null;
-  #planning: Promise<Awaited<ReturnType<Weekmand['plan']>>> | null = null;
+  #planning: { generation: number; promise: Promise<Awaited<ReturnType<Weekmand['plan']>>> } | null = null;
+  /** De laatst gelezen mand. Wijzigingen in Weekmand zelf (overslaan, extra's) hoeven Picnic niet opnieuw te lezen. */
+  #cartRead: { at: number; shop: Shop; cart: ShopCart } | null = null;
+  #cartEpoch = 0;
+  /** Of er een mandberekening in de database staat (planSnapshot), zodat wijzigingen hem kunnen wissen. */
+  #snapshot = false;
+  #planRuns = 0;
+  #ahImport: Promise<{ receipts: AhReceiptLog[] }> | null = null;
+  /** Koppelt onbekende bonregels met de AI; gezet door de assistent als er een AI gekoppeld is. */
+  receiptMatcher?: ReceiptMatcher;
+  /** Deelt producten in voor het budget (categorie, nodig of extra); gezet door de assistent. */
+  productClassifier?: ProductClassifier;
+  /** Past een recept aan volgens een opmerking ("met kippenpoten"); gezet door de assistent. */
+  recipeAdapter?: RecipeAdapter;
+  /** Leest een foto van een kassabon; gezet door de assistent. null: geen AI. */
+  receiptReader?: (image: ImageInput, today: string) => Promise<ReceiptPhoto | null>;
+  #spendSync: Promise<{ added: number; detailed: number; errors: string[] }> | null = null;
   /** Pauze tussen automatische Picnic-zoekopdrachten (ms). */
   searchPause = 1500;
 
-  constructor(options: { store: Store; secrets: Secrets; picnic?: PicnicShop; now?: () => number }) {
+  constructor(options: { store: Store; secrets: Secrets; picnic?: PicnicShop; ah?: AlbertHeijn; now?: () => number }) {
     this.store = options.store;
     this.secrets = options.secrets;
     this.now = options.now ?? Date.now;
@@ -52,10 +103,33 @@ export class Weekmand {
     this.mock = new MockShop(this.store, () => this.catalog.ingredients());
     this.picnic = options.picnic ?? new PicnicShop(this.secrets);
     this.picnic.onExpired = () => this.notify({ text: 'Je Picnic-sessie is verlopen. Meld je opnieuw aan in Weekmand (Instellingen → Picnic) om automatische aanvullingen te laten werken.', key: 'picnic-expired-' + localDate(this.now()) });
+    this.picnic.onImages = images => this.#noteImages(images);
+    this.ah = options.ah ?? new AlbertHeijn(this.secrets, fetch, () => this.now());
+    this.ah.onExpired = () => this.notify({ text: 'De koppeling met je AH-account is verlopen. Koppel opnieuw in Weekmand (Meer → Albert Heijn) om kassabonnen en Mijn lijst te laten werken.', key: 'ah-expired-' + localDate(this.now()) });
     this.events.setMaxListeners(20);
     // Elke wijziging (menu, lijst, voorraad, mand) maakt het gedeelde overzicht verouderd.
-    this.events.on('change', () => { this.#generation++; });
+    // De 12 uur rust na een weigering door AH geldt ook na een herstart.
+    this.ah.pausedUntil = this.store.get<number>('ahPausedUntil', 0);
+    this.ah.onPause = until => this.store.set('ahPausedUntil', until);
+    this.events.on('change', () => {
+      this.#generation++;
+      // De bewaarde mandberekening klopt niet meer.
+      if (this.#snapshot) { this.store.set('planSnapshot', null); this.#snapshot = false; }
+    });
     this.#migrateV1();
+    // Eenmalig: ingrediënten die vroeger standaard "groente-fruit" kregen (kip als groente, kiprecept "vegetarisch").
+    if (!this.store.get<boolean>('categoriesFixed1', false)) {
+      const fixed = this.catalog.fixGuessedCategories();
+      this.store.set('categoriesFixed1', true);
+      if (fixed.ingredients || fixed.recipes) console.log(`Categorieën rechtgezet: ${fixed.ingredients} ingrediënten, ${fixed.recipes} recepten niet meer vegetarisch.`);
+    }
+    // Na een herstart de laatste mandberekening (hooguit tien minuten oud) meteen weer gebruiken.
+    const snap = this.store.get<PlanSnapshot | null>('planSnapshot', null);
+    if (snap && this.now() - snap.at >= 0 && this.now() - snap.at < 10 * 60_000 && snap.shopMode === this.shopMode) {
+      this.#planCache = { plan: snap.plan, at: snap.at, generation: this.#generation };
+      this.#cartRead = { at: snap.cartAt, shop: this.shop, cart: snap.cart };
+      this.#snapshot = true;
+    }
   }
 
   notify(notice: Notice) {
@@ -66,6 +140,8 @@ export class Weekmand {
     this.events.emit('notify', notice);
   }
   changed() { this.events.emit('change'); }
+  /** Telt elke wijziging; zo ziet bijvoorbeeld de Telegram-bot of een bericht iets veranderde. */
+  get revision() { return this.#generation; }
 
   // ───────────── Instellingen ─────────────
 
@@ -103,6 +179,7 @@ export class Weekmand {
     check(mode === 'mock' || mode === 'picnic', 'Kies demo of picnic.');
     this.store.set('shopMode', mode);
     this.#slots = null;
+    this.#forgetCart();
     this.changed();
   }
   get shop(): Shop { return this.shopMode === 'picnic' ? this.picnic : this.mock; }
@@ -168,6 +245,7 @@ export class Weekmand {
         catch (error) { warning = 'Weekmand plant vanaf deze dag, maar kon het moment niet in Picnic zetten: kies het in de Picnic-app. (' + (error as Error).message + ')'; }
       }
       this.store.set('deliveryChoice', { date: localDate(Date.parse(slot.windowStart)), slotId: slot.id });
+      this.#forgetCart();
     } else {
       const today = localDate(this.now());
       check(typeof input.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input.date), 'Kies een datum.');
@@ -367,6 +445,41 @@ export class Weekmand {
     return { date, day: dayName(date), recipe: this.#recipeView(this.catalog.recipe(recipeId)!) };
   }
 
+  /**
+   * Aangevinkte gerechten vervangen. Met een opmerking en een AI: een aangepast recept volgens die
+   * opmerking ("met kippenpoten", "zonder paprika", "iets vegetarisch"). Anders kiest Weekmand een
+   * ander recept uit de catalogus, met de opmerking als wens.
+   */
+  async replaceMeals(input: { dates?: unknown; note?: unknown }) {
+    const dates = [...new Set(Array.isArray(input.dates) ? input.dates.map(String) : [])];
+    check(dates.length >= 1 && dates.length <= 14, 'Vink één of meer gerechten aan.');
+    const note = String(input.note ?? '').trim().slice(0, 300);
+    const results: { date: string; day: string; from: string; to: string; how: 'aangepast' | 'ander recept' }[] = [];
+    for (const date of dates) {
+      const meal = this.store.meal(date);
+      check(meal, `Op ${date} staat geen gerecht.`);
+      const old = this.catalog.recipe(meal.recipeId);
+      let adapted: AdaptedRecipe | null = null;
+      if (note && old && this.recipeAdapter) {
+        adapted = await this.recipeAdapter({
+          name: old.name, minutes: old.minutes, steps: old.steps, tags: old.tags,
+          ingredients: old.ingredients.map(i => ({ name: this.catalog.ingredient(i.key)?.name ?? i.key, amount: i.amount, unit: i.unit })),
+        }, note);
+      }
+      if (adapted) {
+        let id = slug(adapted.name) || 'recept';
+        for (let n = 2; this.catalog.recipe(id); n++) id = `${slug(adapted.name).slice(0, 56)}-${n}`;
+        const recipe = this.catalog.addRecipe({ ...adapted, id }, 'ai');
+        await this.setMeal({ date, recipeId: recipe.id, servings: meal.servings, ...(meal.note ? { note: meal.note } : {}) });
+        results.push({ date, day: dayName(date), from: old?.name ?? meal.recipeId, to: recipe.name, how: 'aangepast' });
+      } else {
+        const swapped = await this.swapMeal(date, note);
+        results.push({ date, day: dayName(date), from: old?.name ?? meal.recipeId, to: swapped.recipe.name, how: 'ander recept' });
+      }
+    }
+    return results;
+  }
+
   removeMeal(date: string) {
     const meal = this.store.meal(date);
     check(meal, 'Op die dag staat geen maaltijd.');
@@ -452,6 +565,11 @@ export class Weekmand {
     for (const key of need.keys()) {
       if (!rows.some(r => r.key === key) && !this.catalog.ingredient(key)?.staple) rows.push({ key, amount: null, checkedAt: null, minimum: 0 });
     }
+    // Wat al in de (Picnic-)mand ligt, uit de laatst berekende mand: geen extra verzoek bij de winkel.
+    const inCart = new Map<string, number>();
+    for (const l of this.#planCache?.plan.lines ?? []) {
+      if (l.key && l.inCartAmount) inCart.set(l.key, Math.max(inCart.get(l.key) ?? 0, l.inCartAmount));
+    }
     const items = rows.map(p => {
       const def = this.catalog.ingredient(p.key);
       const s = stockState(p, this.now());
@@ -460,6 +578,7 @@ export class Weekmand {
         key: p.key, name: def?.name ?? p.key, category: def?.category ?? 'overig', unit: def?.unit ?? 'st',
         amount: p.amount, text: p.amount === null ? 'onbekend' : formatAmount(p.amount, def?.unit ?? 'st'),
         minimum: p.minimum, checkedAt: p.checkedAt, estimate: !s.fresh, status, neededThisOrder: need.get(p.key) ?? 0,
+        inCart: inCart.get(p.key) ?? 0,
       };
     });
     return {
@@ -574,18 +693,27 @@ export class Weekmand {
         added.push({ id: randomUUID().slice(0, 8), kind: 'ingredient', key: def.key, amount, label: `${formatAmount(amount, def.unit)} ${def.name.toLowerCase()}` });
         continue;
       }
-      let product = item.productId ? this.#searchCache.get(item.productId) : undefined;
+      let product = item.productId ? await this.#findProduct(item.productId, item.name) : undefined;
+      if (item.productId) check(product, `Ik vind product ${item.productId} niet meer; zoek het opnieuw op.`);
       if (!product) {
-        const results = (await this.#requireShop().search(item.name)).filter(p => p.available);
-        for (const r of results) this.#searchCache.set(r.id, r);
-        product = results[0];
+        // "Kippenpoten 650 g" vindt niets; "kippenpoten" wel.
+        for (const query of [item.name, baseName(item.name)]) {
+          if (!query) continue;
+          const results = (await this.#requireShop().search(query)).filter(p => p.available);
+          for (const r of results) this.#searchCache.set(r.id, r);
+          product = results[0];
+          if (product) break;
+        }
       }
       check(product, `Ik vind "${item.name}" niet in de ${this.shop.label.toLowerCase()}.`);
       added.push({ id: randomUUID().slice(0, 8), kind: 'product', productId: product.id, name: product.name, unitQuantity: product.unitQuantity, cents: product.cents, quantity, ...(def ? { key: def.key } : {}) });
     }
     this.#setOrder(o => ({
+      ...o,
       extras: [...o.extras, ...added],
       skip: o.skip.filter(k => !added.some(a => (a.kind === 'ingredient' ? a.key : a.key ?? a.productId) === k)),
+      // Weggeveegde regels blijven weg, behalve een product dat je nu zelf weer toevoegt.
+      declined: (o.declined ?? []).filter(id => !added.some(a => a.kind === 'product' && a.productId === id)),
     }));
     return added.map(a => a.kind === 'product' ? `${a.quantity}× ${a.name}` : a.label);
   }
@@ -693,20 +821,84 @@ export class Weekmand {
 
   async searchProducts(query: string) {
     check(typeof query === 'string' && query.trim() && query.length <= 80, 'Geef een zoekterm van maximaal 80 tekens.');
-    const results = await this.#requireShop().search(query.trim());
+    let results = await this.#requireShop().search(query.trim());
+    // "kippenpoten 650 gram" vindt bij Picnic niets; "kippenpoten" wel.
+    const bare = baseName(query);
+    if (!results.length && bare && bare !== normalize(query)) results = await this.#requireShop().search(bare);
     for (const r of results) this.#searchCache.set(r.id, r);
     return results;
   }
 
   links() { return this.store.links(); }
 
-  linkProduct(name: string, productId: string) {
+  /** Afbeelding-id per Picnic-product, voor de productfoto's in de webapp. Blijft bewaard na een herstart. */
+  #images: Record<string, string> | null = null;
+  #imageMap() { return this.#images ??= this.store.get<Record<string, string>>('productImages', {}); }
+  #noteImages(found: Record<string, string>) {
+    const all = this.#imageMap();
+    let changed = false;
+    for (const [id, image] of Object.entries(found)) if (all[id] !== image) { delete all[id]; all[id] = image; changed = true; }
+    if (!changed) return;
+    const ids = Object.keys(all);
+    for (const id of ids.slice(0, Math.max(0, ids.length - 2000))) delete all[id];
+    this.store.set('productImages', all);
+  }
+  productImage(productId: string): string | undefined { return this.#imageMap()[productId]; }
+
+  /** Het voorstel met de bekende productfoto's, voor de webapp. */
+  withImages<T extends { lines: { productId: string }[] }>(plan: T): T {
+    return { ...plan, lines: plan.lines.map(l => { const image = this.productImage(l.productId); return image ? { ...l, image } : l; }) };
+  }
+
+  /**
+   * Meer over één product, voor het productvenster in de webapp: foto, merk en omschrijving van de
+   * productpagina bij Picnic, en voor welk ingrediënt Weekmand het koopt (key).
+   */
+  async productInfo(id: string) {
+    check(/^[A-Za-z0-9_-]{1,64}$/.test(id), 'Onbekend product.');
+    const key = this.#productKey(id);
+    const image = this.productImage(id);
+    const base = { id, ...(image ? { image } : {}), ...(key ? { key } : {}) };
+    if (this.shopMode !== 'picnic' || !this.picnic.ready()) return base;
+    try {
+      return { ...await this.picnic.product(id), ...base };
+    } catch {
+      return base;
+    }
+  }
+
+  /** Een product dat eerder gezocht is; anders opnieuw zoeken op de naam (de zoekcache verdwijnt bij een herstart). */
+  async #findProduct(productId: string, hint?: string) {
+    const cached = this.#searchCache.get(productId);
+    if (cached || !hint) return cached;
+    for (const query of [hint, baseName(hint)]) {
+      if (!query) continue;
+      for (const r of await this.#requireShop().search(query)) this.#searchCache.set(r.id, r);
+      if (this.#searchCache.has(productId)) return this.#searchCache.get(productId);
+    }
+    return undefined;
+  }
+
+  /**
+   * Koppel een ingrediënt aan een gekozen product (uit search_products), ook vanuit de chat.
+   * perPack: hoeveel van het ingrediënt één verpakking dekt, als de verpakking zich niet laat omrekenen
+   * (een ingrediënt in stuks, een product in gram).
+   */
+  async linkProductFor(name: string, productId: string, options: { productName?: string; perPack?: number } = {}) {
+    const def = this.catalog.resolve(name);
+    check(def, `Ik ken "${name}" niet als ingrediënt.`);
+    const product = await this.#findProduct(productId, options.productName ?? def.query ?? def.name);
+    check(product, 'Zoek het product eerst op met search_products en gebruik het product_id daaruit.');
+    return this.linkProduct(def.name, product.id, options.perPack);
+  }
+
+  linkProduct(name: string, productId: string, perPack?: number) {
     const def = this.catalog.resolve(name);
     check(def, `Ik ken "${name}" niet als ingrediënt.`);
     const product = this.#searchCache.get(productId);
     check(product, 'Zoek het product eerst op.');
-    const amount = packAmount(product.unitQuantity, def);
-    check(amount, `Ik kan de verpakking "${product.unitQuantity}" niet omrekenen naar ${def.unit}. Kies een ander product.`);
+    const amount = packAmount(product.unitQuantity, def) ?? (Number(perPack) > 0 && Number(perPack) < 100000 ? Number(perPack) : null);
+    check(amount, `Ik kan de verpakking "${product.unitQuantity}" niet omrekenen naar ${def.unit}. Geef per_pack mee (hoeveel ${def.unit === 'st' ? 'stuks' : def.unit} één verpakking dekt) of kies een ander product.`);
     const link: ProductLink = { key: def.key, productId: product.id, name: product.name, unitQuantity: product.unitQuantity, packAmount: amount, cents: product.cents, auto: false, updatedAt: new Date(this.now()).toISOString() };
     this.store.saveLink(link);
     this.#saveVariants(def, link, [...this.#searchCache.values()]);
@@ -817,9 +1009,30 @@ export class Weekmand {
     });
   }
 
-  async plan(): Promise<Plan & { id: string; window: { start: string; end: string }; meals: { date: string; day: string; name: string; servings: number }[] }> {
+  /** De mand lezen, of binnen `maxAge` ms de vorige lezing hergebruiken. */
+  async #readCart(shop: Shop, maxAge = 0): Promise<{ cart: ShopCart; at: number }> {
+    const c = this.#cartRead;
+    const age = c ? this.now() - c.at : Infinity;
+    if (c && c.shop === shop && age >= 0 && age < maxAge) return c;
+    const epoch = this.#cartEpoch;
+    const cart = await shop.readCart();
+    const read = { at: this.now(), shop, cart };
+    // Schreef Weekmand tijdens het lezen naar de mand, dan is deze lezing al verouderd: niet bewaren.
+    if (epoch === this.#cartEpoch) this.#cartRead = read;
+    return read;
+  }
+  /** Na een schrijfactie op de mand (of een ander bezorgmoment) de mand opnieuw lezen. */
+  #forgetCart() {
+    this.#cartRead = null;
+    this.#cartEpoch++;
+    if (this.#snapshot) { this.store.set('planSnapshot', null); this.#snapshot = false; }
+  }
+
+  /** cartMaxAge: een eerdere lezing van de Picnic-mand mag zo oud zijn (ms); standaard altijd vers. */
+  async plan(options: { cartMaxAge?: number } = {}): Promise<Plan & { id: string; window: { start: string; end: string }; cartReadAt: string; meals: { date: string; day: string; name: string; servings: number }[] }> {
     const shop = this.#requireShop();
     const generation = this.#generation;
+    const run = ++this.#planRuns;
     this.consumePastMeals();
     const w = await this.window();
     const meals: PlanMeal[] = this.store.meals(w.start, w.end).flatMap(m => {
@@ -829,7 +1042,7 @@ export class Weekmand {
     const keys = new Set([...meals.flatMap(m => m.recipe.ingredients.map(i => i.key)), ...this.store.pantry().filter(p => p.minimum > 0).map(p => p.key),
       ...this.order.extras.flatMap(e => e.kind === 'ingredient' ? [e.key] : [])]);
     await this.#ensureLinks([...keys].filter(k => !this.catalog.ingredient(k)?.staple || (this.store.pantryItem(k)?.amount === 0)));
-    const cart = await shop.readCart();
+    const { cart, at: cartAt } = await this.#readCart(shop, options.cartMaxAge);
     this.#rememberCartRecipes(cart);
     const ledger = this.#syncLedger(cart);
     const plan = buildPlan({
@@ -838,12 +1051,20 @@ export class Weekmand {
       productKey: (id, name) => this.#productKey(id, name), now: this.now(),
     });
     const id = randomUUID();
-    this.store.set('review', { id, createdAt: this.now(), plan } satisfies StoredReview);
     const result = {
-      ...plan, id, window: { start: w.start, end: w.end }, computedAt: new Date(this.now()).toISOString(),
+      ...plan, id, window: { start: w.start, end: w.end }, computedAt: new Date(this.now()).toISOString(), cartReadAt: new Date(cartAt).toISOString(),
       meals: meals.map(m => ({ date: m.date, day: dayName(m.date), name: m.recipe.name, servings: m.servings })),
     };
-    this.#planCache = { plan: result, at: this.now(), generation };
+    // Is intussen een nieuwere berekening gestart, dan bewaart die het overzicht; deze mag hem niet overschrijven.
+    if (run === this.#planRuns) {
+      this.store.set('review', { id, createdAt: this.now(), plan } satisfies StoredReview);
+      this.#planCache = { plan: result, at: this.now(), generation };
+      // Bewaren voor na een herstart, maar alleen als er tijdens het rekenen niets veranderde.
+      if (generation === this.#generation) {
+        this.store.set('planSnapshot', { at: this.now(), shopMode: this.shopMode, plan: result, cart, cartAt } satisfies PlanSnapshot);
+        this.#snapshot = true;
+      }
+    }
     return result;
   }
 
@@ -854,9 +1075,15 @@ export class Weekmand {
    */
   async currentPlan(maxAge = 10 * 60_000) {
     const cache = this.#planCache;
-    if (cache && cache.generation === this.#generation && this.now() - cache.at >= 0 && this.now() - cache.at < maxAge) return cache.plan;
-    this.#planning ??= this.plan().finally(() => { this.#planning = null; });
-    return this.#planning;
+    const generation = this.#generation;
+    if (cache && cache.generation === generation && this.now() - cache.at >= 0 && this.now() - cache.at < maxAge) return cache.plan;
+    // Een lopende berekening van vóór de laatste wijziging telt niet: die mist de wijziging.
+    if (this.#planning?.generation !== generation) {
+      // Alleen iets in Weekmand veranderd: de mand van de vorige berekening is nog goed (tot maxAge).
+      const promise = this.plan({ cartMaxAge: maxAge }).finally(() => { if (this.#planning?.promise === promise) this.#planning = null; });
+      this.#planning = { generation, promise };
+    }
+    return this.#planning.promise;
   }
 
   /** Breng de mand naar het goedgekeurde overzicht. Herhaalbaar en veilig bij tussentijdse wijzigingen. */
@@ -870,9 +1097,10 @@ export class Weekmand {
     check(JSON.stringify(fresh.target) === JSON.stringify(review.plan.target) && fresh.cartId === review.plan.cartId,
       'De mand of het menu is intussen veranderd. Bekijk het nieuwe overzicht.', 409);
     const names = new Map(fresh.lines.map(l => [l.productId, l.product]));
+    this.#forgetCart();
     const { applied } = await applyChange(this.shop, { cartId: fresh.cartId, before: fresh.before, target: fresh.target }, (productId, delta) => {
       this.store.update<Ledger>('ledger', { cartId: fresh.cartId, lines: {} }, l => ({ ...l, lines: { ...l.lines, [productId]: Math.max(0, (l.lines[productId] ?? 0) + delta) } }));
-    });
+    }).finally(() => this.#forgetCart());
     this.store.set('review', { id: fresh.id, createdAt: this.now(), plan: fresh, done: true } satisfies StoredReview);
     this.store.update<string[]>('doneReviews', [], ids => [id, fresh.id, ...ids].slice(0, 20));
     // Deze maaltijden zijn nu echt besteld: ze komen in de receptgeschiedenis.
@@ -883,12 +1111,20 @@ export class Weekmand {
     return { applied, already: false, summary: parts.length ? 'Mand bijgewerkt: ' + parts.join(', ') : 'De mand was al in orde.' };
   }
 
-  async cart() {
+  /** De Picnic-mand zoals het voorstel hem ziet: dezelfde lezing, zodat lijst en voorstel kloppen. */
+  async cart(maxAge = 10 * 60_000) {
     const shop = this.#requireShop();
-    const cart = await shop.readCart();
+    const { cart } = await this.#readCart(shop, maxAge);
     this.#rememberCartRecipes(cart);
     const ledger = this.#syncLedger(cart);
-    return { shop: shop.label, id: cart.id, totalCents: cart.totalCents, lines: cart.lines.map(l => ({ ...l, byWeekmand: ledger.lines[l.id] ?? 0 })) };
+    return {
+      shop: shop.label, id: cart.id, totalCents: cart.totalCents, lines: cart.lines.map(l => {
+        const byWeekmand = ledger.lines[l.id] ?? 0;
+        // Voor regels van Weekmand: het ingrediënt, zodat je in de webapp een ander product kunt kiezen.
+        const key = byWeekmand ? this.#productKey(l.id) : undefined;
+        return { ...l, byWeekmand, ...(key ? { key } : {}) };
+      }),
+    };
   }
 
   /** Picnic-recepten in de mand onthouden: na de bestelling zijn dat "bestelde" recepten. */
@@ -906,6 +1142,33 @@ export class Weekmand {
     return importPicnicRecipes(this);
   }
 
+  /** Recept van een website ophalen en omrekenen, nog zonder op te slaan. */
+  async previewRecipeFromUrl(url: string) {
+    check(typeof url === 'string' && url.length <= 2000, 'Geef een link naar een recept.');
+    const page = await fetchPage(url);
+    const recipe = extractRecipe(page.html, page.url);
+    check(recipe, 'Op deze pagina staat geen leesbaar recept. Probeer de link van de receptpagina zelf.', 422);
+    return previewRecipe(recipe, this.catalog);
+  }
+
+  /** Een geplakte ingrediëntenlijst omrekenen, nog zonder op te slaan. */
+  previewRecipeFromText(input: { name?: unknown; servings?: unknown; text?: unknown }) {
+    return previewRecipe(recipeFromText(input), this.catalog);
+  }
+
+  /** Een (eventueel aangepast) voorbeeld opslaan als recept. */
+  saveImportedRecipe(preview: Preview, skip: string[] = []) {
+    check(preview && Array.isArray(preview.lines), 'Geen recept om op te slaan.');
+    const lines = preview.lines.filter(l => l.status !== 'overgeslagen' && !skip.includes(l.original) && l.amount > 0).slice(0, 30);
+    check(lines.length, 'Kies minstens één ingrediënt.');
+    const recipe = this.catalog.addRecipe({
+      name: String(preview.name), tags: [...(preview.tags ?? []), ...(preview.url ? ['online'] : [])], minutes: Number(preview.minutes) || 30, steps: String(preview.steps ?? ''),
+      ingredients: lines.map(l => ({ name: l.key ? this.catalog.ingredient(l.key)?.name ?? l.name : l.name, amount: l.amount, unit: l.unit })),
+    }, 'web');
+    this.changed();
+    return recipe;
+  }
+
   /** Opgehaalde Picnic-recepten voor de receptentab. */
   picnicRecipes() {
     const known = this.store.get<Record<string, { labels: string[]; recipeId: string; name: string }>>('picnicRecipes', {});
@@ -920,6 +1183,7 @@ export class Weekmand {
     check(this.shop === this.mock, 'Alleen in de demowinkel. Bij Picnic rond je de bestelling af in de Picnic-app.');
     const w = await this.window();
     this.store.markOrdered(this.store.meals(w.start, w.end).map(m => m.date));
+    this.#forgetCart();
     const lines = await this.mock.checkout();
     this.#addDelivered(lines.map(l => ({ productId: l.id, name: l.name, unitQuantity: l.unitQuantity, quantity: l.quantity })));
     this.store.set('ledger', { cartId: (await this.mock.readCart()).id, lines: {} });
@@ -980,6 +1244,15 @@ export class Weekmand {
   async importHistory() {
     const history = await this.picnic.history(this.now());
     this.store.set('picnicHistory', history);
+    // Het budget krijgt de regels met prijzen meteen mee; oudere bezorgingen haalt syncSpending op.
+    for (const d of history.deliveries) {
+      const items = d.orders.flatMap(o => o.items);
+      const id = 'picnic:' + d.id;
+      if (!items.length || items.some(i => typeof i.cents !== 'number') || this.store.spend(id)?.lines) continue;
+      const prev = this.store.spend(id);
+      this.store.saveSpend({ ...prev, id, source: 'picnic', date: d.date, totalCents: d.paidCents ?? d.totalCents,
+        lines: items.map(i => ({ name: i.name, quantity: i.quantity, cents: i.cents! })), ...(d.savingsCents ? { savingsCents: d.savingsCents } : {}) });
+    }
     const since = this.store.get<string | null>('trackingSince', null) ?? this.store.update<string | null>('trackingSince', null, () => localDate(this.now()));
     const applied = new Set(this.store.get<string[]>('appliedDeliveries', []));
     let added = 0;
@@ -993,6 +1266,615 @@ export class Weekmand {
     this.#deriveRegulars(history);
     this.changed();
     return { deliveries: history.deliveries.length, addedToPantry: added };
+  }
+
+  // ───────────── Albert Heijn: Mijn lijst en kassabonnen ─────────────
+
+  ahStatus() {
+    return {
+      linked: this.ah.linked, linkedAt: this.ah.linkedAt, loginUrl: AH_LOGIN_URL,
+      lastSync: this.store.get<number>('ahLastSync', 0) || null,
+      receipts: this.store.get<AhReceiptLog[]>('ahReceiptLog', []).slice(0, 5),
+      unmatched: this.unmatchedReceiptLines(),
+    };
+  }
+
+  async linkAh(text: string) {
+    await this.ah.link(text);
+    // Bonnen van de afgelopen drie dagen tellen mee; oudere zitten al in de voorraad (of zijn op).
+    if (!this.store.get<string | null>('ahSince', null)) this.store.set('ahSince', addDays(localDate(this.now()), -3));
+    this.changed();
+    return this.ahStatus();
+  }
+
+  unlinkAh() {
+    this.ah.unlink();
+    this.changed();
+  }
+
+  /**
+   * Wat Weekmand nog wil kopen en niet al in de Picnic-mand zit, als tekst voor Mijn lijst in de
+   * AH-app: de naam van het ingrediënt met de verpakking die Weekmand zou kopen ('Halfvolle melk (1 liter)').
+   */
+  async ahListProposal() {
+    const plan = await this.currentPlan();
+    return plan.lines.filter(l => l.add > 0 && !l.declined).map(l => {
+      const def = l.key ? this.catalog.ingredient(l.key) : undefined;
+      const name = def?.name ?? l.product;
+      return { id: l.productId, text: l.unitQuantity ? `${name} (${l.unitQuantity})` : name, quantity: l.add, match: def ? normalize(def.name) : baseName(l.product) };
+    });
+  }
+
+  /**
+   * Zet boodschappen op Mijn lijst in de AH-app. Zonder keuze: alles wat Weekmand nog wil kopen.
+   * Wat al (niet afgestreept) op de lijst staat, wordt overgeslagen.
+   */
+  async sendToAhList(input: { ids?: string[]; extra?: string[] } = {}) {
+    check(this.ah.linked, 'Koppel eerst je AH-account (Meer → Albert Heijn).', 409);
+    const proposal = Array.isArray(input.ids) && !input.ids.length ? [] : await this.ahListProposal();
+    const chosen = Array.isArray(input.ids) && input.ids.length ? proposal.filter(p => input.ids!.includes(p.id)) : proposal;
+    const extra = (Array.isArray(input.extra) ? input.extra : []).map(s => String(s).trim()).filter(s => s && s.length <= 80).slice(0, 30);
+    const wanted = [...chosen, ...extra.map(text => ({ text, quantity: 1, match: normalize(text) }))];
+    check(wanted.length, 'Er is niets om op de lijst te zetten.');
+    const onList = (await this.ah.list()).filter(i => !i.struck).map(i => normalize(i.description));
+    const added: typeof wanted = [];
+    const skipped: string[] = [];
+    for (const w of wanted) {
+      if (!w.match || onList.some(d => d.includes(w.match)) || added.some(a => a.match === w.match)) skipped.push(w.text);
+      else added.push(w);
+    }
+    await this.ah.addToList(added.map(a => ({ description: a.text, quantity: a.quantity })));
+    return { added: added.map(a => a.text), skipped };
+  }
+
+  /** Nieuwe AH-kassabonnen ophalen en de producten bij de voorraad tellen (elke bon één keer). */
+  importAhReceipts() {
+    // Eén ophaalronde tegelijk (planner en knop), anders kan een bon dubbel tellen.
+    this.#ahImport ??= this.#importAhReceipts().finally(() => { this.#ahImport = null; });
+    return this.#ahImport;
+  }
+
+  async #importAhReceipts() {
+    check(this.ah.linked, 'Koppel eerst je AH-account (Meer → Albert Heijn).', 409);
+    const since = this.store.get<string | null>('ahSince', null) ?? addDays(localDate(this.now()), -3);
+    const applied = new Set(this.store.get<string[]>('ahAppliedReceipts', []));
+    const fresh = (await this.ah.receipts(10)).filter(r => !applied.has(r.id) && r.dateTime.slice(0, 10) >= since).reverse().slice(0, 5);
+    const done: AhReceiptLog[] = [];
+    for (const receipt of fresh) {
+      if (done.length && this.searchPause) await new Promise(r => setTimeout(r, this.searchPause));
+      const { lines, discounts } = await this.ah.receiptDetails(receipt.id);
+      this.#saveAhSpend(receipt.id, receipt.dateTime.slice(0, 10), receipt.total === null ? null : Math.round(receipt.total * 100), lines, discounts);
+      const result = this.#addBought(lines);
+      applied.add(receipt.id);
+      this.store.set('ahAppliedReceipts', [...applied].slice(-200));
+      done.unshift({ id: receipt.id, date: receipt.dateTime, total: receipt.total, ...result });
+      this.store.update<AhReceiptLog[]>('ahReceiptLog', [], log => [done[0], ...log].slice(0, 10));
+    }
+    this.store.set('ahLastSync', this.now());
+    if (!done.length) return { receipts: done };
+    // Onbekende regels: de AI zoekt ze op (als die gekoppeld is). Een fout daarin stopt het ophalen niet.
+    if (done.some(r => r.unmatched.length)) await this.matchReceiptLines().catch(error => console.error('Bonregels koppelen:', (error as Error).message));
+    this.changed();
+    const log = this.store.get<AhReceiptLog[]>('ahReceiptLog', []);
+    return { receipts: done.map(d => log.find(l => l.id === d.id) ?? d) };
+  }
+
+  /** Producten van een kassabon bij de voorraad tellen. Zonder maat op de bon: één gewone verpakking per stuk. */
+  #addBought(lines: AhReceiptLine[]) {
+    const counted: string[] = [];
+    const unmatched: string[] = [];
+    this.store.tx(() => {
+      for (const line of lines) {
+        if (!(line.quantity > 0) || notGroceries.test(line.name)) continue;
+        const quantity = Number.isInteger(line.quantity) && line.quantity <= 50 ? line.quantity : 1;
+        const result = this.#countReceiptLine(line.name, quantity);
+        if (result === 'ignored') continue;
+        if (result) counted.push(result); else unmatched.push(`${quantity}× ${line.name}`);
+      }
+    });
+    return { counted, unmatched };
+  }
+
+  /** Telt één bonregel bij de voorraad. Geeft de tekst voor het logboek, 'ignored' of null (onbekend). */
+  #countReceiptLine(name: string, quantity: number): string | 'ignored' | null {
+    const alias = this.store.get<Record<string, ReceiptAlias>>('receiptAliases', {})[receiptKey(name)];
+    if (alias && alias.key === null) return 'ignored';
+    const def = alias?.key ? this.catalog.ingredient(alias.key) : this.catalog.resolve(receiptName(name));
+    const pack = def ? packAmount(name, def) ?? alias?.amount ?? def.packs[0]?.amount : undefined;
+    if (!def || !pack) return null;
+    const item = this.store.pantryItem(def.key) ?? { key: def.key, amount: null, checkedAt: null, minimum: 0 };
+    this.store.savePantry({ ...item, amount: (item.amount ?? 0) + pack * quantity, checkedAt: new Date(this.now()).toISOString() });
+    return `${quantity}× ${name} → ${def.name}`;
+  }
+
+  /** Onbekende bonregels uit de recente bonnen, één keer per naam. */
+  unmatchedReceiptLines() {
+    const seen = new Map<string, { name: string; quantity: number }>();
+    for (const entry of this.store.get<AhReceiptLog[]>('ahReceiptLog', [])) {
+      for (const text of entry.unmatched) {
+        const m = /^(\d+)× (.+)$/.exec(text);
+        const name = m ? m[2] : text;
+        const known = seen.get(receiptKey(name));
+        seen.set(receiptKey(name), { name, quantity: (known?.quantity ?? 0) + (m ? Number(m[1]) : 1) });
+      }
+    }
+    return [...seen.values()];
+  }
+
+  /**
+   * Laat de AI onbekende bonregels koppelen aan een ingrediënt (of als 'geen boodschap' markeren).
+   * Elke uitkomst wordt onthouden, dus een volgende bon met dezelfde regel kost geen AI meer.
+   * Zonder `force` vraagt Weekmand een regel maar één keer.
+   */
+  async matchReceiptLines({ force = false } = {}) {
+    const asked = new Set(this.store.get<string[]>('receiptAsked', []));
+    const open = this.unmatchedReceiptLines().filter(l => force || !asked.has(receiptKey(l.name))).slice(0, 40);
+    if (!open.length) return { matched: [] as string[], unknown: [] as string[] };
+    const ingredients = this.catalog.ingredients().map(i => ({ key: i.key, name: i.name, unit: i.unit }));
+    const answers = this.receiptMatcher ? await this.receiptMatcher(open.map(l => l.name), ingredients) : null;
+    if (!answers) {
+      check(!force, 'Koppel eerst een AI-aanbieder (Meer → AI-aanbieder), of koppel de regels zelf.', 409);
+      return { matched: [] as string[], unknown: open.map(l => l.name) };
+    }
+    const aliases = this.store.get<Record<string, ReceiptAlias>>('receiptAliases', {});
+    const matched: string[] = [];
+    for (const a of answers) {
+      const line = open.find(l => receiptKey(l.name) === receiptKey(String(a.receipt ?? '')));
+      if (!line) continue;
+      const amount = typeof a.amount === 'number' && a.amount > 0 && a.amount <= 20_000 ? a.amount : undefined;
+      if (a.kind === 'ignore') aliases[receiptKey(line.name)] = { key: null, by: 'ai' };
+      else if (a.kind === 'existing' && a.key && this.catalog.ingredient(a.key)) aliases[receiptKey(line.name)] = { key: a.key, amount, by: 'ai' };
+      else if (a.kind === 'new' && typeof a.name === 'string' && /^[\p{L}\d' -]{2,40}$/u.test(a.name.trim()) && ['g', 'ml', 'st'].includes(String(a.unit))) {
+        const def = this.catalog.ensureIngredient(a.name.trim(), a.unit as BaseUnit, categories.includes(a.category as Category) ? a.category as Category : undefined);
+        aliases[receiptKey(line.name)] = { key: def.key, amount, by: 'ai' };
+      } else continue;
+      matched.push(line.name);
+    }
+    this.store.set('receiptAliases', aliases);
+    this.store.set('receiptAsked', [...new Set([...asked, ...open.map(l => receiptKey(l.name))])].slice(-500));
+    this.#recountReceiptLog();
+    return { matched, unknown: open.map(l => l.name).filter(n => !matched.includes(n)) };
+  }
+
+  /** Zelf een bonregel koppelen aan een ingrediënt (naam of sleutel), of met null negeren. */
+  mapReceiptLine(name: string, ingredient: string | null) {
+    check(typeof name === 'string' && name.trim() && name.length <= 80, 'Welke bonregel?');
+    let alias: ReceiptAlias = { key: null, by: 'user' };
+    if (ingredient !== null) {
+      const def = this.catalog.ingredient(String(ingredient)) ?? this.catalog.resolve(String(ingredient));
+      check(def, `Ik ken "${ingredient}" niet. Voeg het eerst toe onder Voorraad (Ander product bijhouden).`);
+      alias = { key: def.key, by: 'user' };
+    }
+    this.store.update<Record<string, ReceiptAlias>>('receiptAliases', {}, a => ({ ...a, [receiptKey(name)]: alias }));
+    this.#recountReceiptLog();
+    this.changed();
+    return { name: name.trim(), key: alias.key };
+  }
+
+  /** Onbekende regels in het logboek die inmiddels gekoppeld zijn alsnog bij de voorraad tellen. */
+  #recountReceiptLog() {
+    const log = this.store.get<AhReceiptLog[]>('ahReceiptLog', []);
+    this.store.tx(() => {
+      for (const entry of log) {
+        const still: string[] = [];
+        for (const text of entry.unmatched) {
+          const m = /^(\d+)× (.+)$/.exec(text);
+          const result = m ? this.#countReceiptLine(m[2], Number(m[1])) : null;
+          if (result === 'ignored') (entry.ignored ??= []).push(m![2]);
+          else if (result) entry.counted.push(result);
+          else still.push(text);
+        }
+        entry.unmatched = still;
+      }
+      this.store.set('ahReceiptLog', log);
+    });
+  }
+
+  // ───────────── Budget: wat er werkelijk uitgegeven is ─────────────
+
+  /** Maandbudget (standaard afgeleid van het mandbudget per bestelling) en limieten per categorie. */
+  budgetSettings() {
+    const s = this.store.get<BudgetPrefs>('budget', {});
+    const derived = Math.round(this.household.budget * 52 / 12 / 5) * 500;
+    return { monthCents: s.monthCents ?? derived, custom: !!s.monthCents, limits: s.limits ?? {} };
+  }
+
+  setBudget(input: { month?: unknown; limit?: { category?: unknown; month?: unknown } }) {
+    const empty = (v: unknown) => v === null || v === '' || v === 0 || v === '0';
+    this.store.update<BudgetPrefs>('budget', {}, s => {
+      const next: BudgetPrefs = { ...s, limits: { ...s.limits } };
+      if (input.month !== undefined) {
+        if (empty(input.month)) delete next.monthCents;
+        else {
+          const m = Number(String(input.month).replace(',', '.'));
+          check(Number.isFinite(m) && m >= 10 && m <= 20000, 'Kies een maandbudget tussen € 10 en € 20.000.');
+          next.monthCents = Math.round(m * 100);
+        }
+      }
+      if (input.limit) {
+        const category = String(input.limit.category) as BudgetCategory;
+        check(categoryKeys.includes(category), 'Onbekende categorie.');
+        if (empty(input.limit.month)) delete next.limits![category];
+        else {
+          const v = Number(String(input.limit.month).replace(',', '.'));
+          check(Number.isFinite(v) && v > 0 && v <= 20000, 'Kies een limiet tussen € 0 en € 20.000 per maand.');
+          next.limits![category] = Math.round(v * 100);
+        }
+      }
+      return next;
+    });
+    return this.budgetSettings();
+  }
+
+  /** Hoe een product meetelt: eigen keuze, dan de AI, dan vaste regels, dan de catalogus. */
+  #labeler() {
+    const saved = this.store.get<Record<string, ProductLabel>>('productLabels', {});
+    const aliases = this.store.get<Record<string, ReceiptAlias>>('receiptAliases', {});
+    const memo = new Map<string, ProductLabel | null>();
+    return (name: string): ProductLabel | null => {
+      const key = labelKey(name);
+      if (memo.has(key)) return memo.get(key)!;
+      let label: ProductLabel | null = saved[key] ?? null;
+      const rule = label ? null : ruleCategory(name);
+      if (rule) label = { category: rule, kind: kindOf(rule), by: 'regel' };
+      if (!label) {
+        const alias = aliases[receiptKey(name)];
+        if (alias && !alias.key) label = { category: 'huishouden', kind: 'geen-eten', by: 'catalogus' };
+        else {
+          const def = alias?.key ? this.catalog.ingredient(alias.key) : this.catalog.resolve(name) ?? this.catalog.resolve(receiptName(name));
+          if (def) { const category = categoryFromCatalog(def.category); label = { category, kind: kindOf(category), by: 'catalogus' }; }
+        }
+      }
+      memo.set(key, label);
+      return label;
+    };
+  }
+
+  /**
+   * Totalen en regels van Picnic-bezorgingen en AH-kassabonnen bijhouden. De totalen komen in één
+   * keer (een paar verzoeken); de regels per aankoop rustig aan, `details` per keer, nieuwste eerst.
+   */
+  syncSpending(options: { details?: number } = {}) {
+    this.#spendSync ??= this.#syncSpending(Math.max(1, Math.min(20, options.details ?? 4))).finally(() => { this.#spendSync = null; });
+    return this.#spendSync;
+  }
+
+  async #syncSpending(details: number) {
+    const result = { added: 0, detailed: 0, errors: [] as string[] };
+    const today = localDate(this.now());
+    const cutoff = addDays(today, -3 * 366);
+    let calls = 0;
+    const pause = async () => { if (calls++ && this.searchPause) await new Promise(r => setTimeout(r, this.searchPause)); };
+    // AH-bonnen van vóór de bonusregels komen ook nog een keer langs.
+    const missing = (source: SpendSource, n: number) => [...this.store.spendIndex(source)].filter(([, v]) => !v.detailed || (source === 'ah' && !v.discounts))
+      .sort((a, b) => b[1].date.localeCompare(a[1].date)).slice(0, n);
+    if (this.picnic.ready()) {
+      try {
+        await pause();
+        const index = this.store.spendIndex('picnic');
+        for (const s of await this.picnic.deliverySummaries()) {
+          if (s.status !== 'COMPLETED' || !s.id) continue;
+          const when = Date.parse(s.windowStart ?? s.creationTime);
+          if (!Number.isFinite(when) || when > this.now()) continue;
+          const date = localDate(when);
+          if (date < cutoff || index.has('picnic:' + s.id)) continue;
+          this.store.saveSpend({ id: 'picnic:' + s.id, source: 'picnic', date, totalCents: s.totalPrice });
+          result.added++;
+        }
+        for (const [id, v] of missing('picnic', details)) {
+          await pause();
+          this.#savePicnicSpend(id, v.date, await this.picnic.delivery(id.slice('picnic:'.length)));
+          result.detailed++;
+        }
+      } catch (error) { result.errors.push('Picnic: ' + (error as Error).message); }
+    }
+    if (this.ah.linked) {
+      try {
+        const index = this.store.spendIndex('ah');
+        const state = this.store.get<{ ahOffset?: number; ahDone?: boolean }>('spendBackfill', {});
+        // Elke keer de nieuwste bonnen, en zolang het terugzoeken niet klaar is één oudere pagina.
+        for (const offset of [0, ...(state.ahDone ? [] : [state.ahOffset ?? 25])]) {
+          await pause();
+          const page = await this.ah.receipts(25, offset);
+          let fresh = 0;
+          for (const r of page) {
+            const date = r.dateTime.slice(0, 10);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < cutoff || r.total === null || index.has('ah:' + r.id)) continue;
+            this.store.saveSpend({ id: 'ah:' + r.id, source: 'ah', date, totalCents: Math.round(r.total * 100) });
+            index.set('ah:' + r.id, { date, detailed: false });
+            result.added++;
+            fresh++;
+          }
+          // Klaar bij een korte pagina, bonnen van vóór de grens, of een pagina zonder nieuwe bonnen (dan bladert AH niet verder).
+          if (offset) this.store.set('spendBackfill', { ahOffset: offset + 25, ahDone: page.length < 25 || !fresh || page.some(r => r.dateTime.slice(0, 10) < cutoff) });
+        }
+        for (const [id, v] of missing('ah', Math.max(1, Math.ceil(details * 3 / 4)))) {
+          await pause();
+          const { lines, discounts } = await this.ah.receiptDetails(id.slice(3));
+          this.#saveAhSpend(id.slice(3), v.date, null, lines, discounts);
+          result.detailed++;
+        }
+      } catch (error) { result.errors.push('AH: ' + (error as Error).message); }
+    }
+    this.store.set('spendSync', { at: this.now(), errors: result.errors });
+    return result;
+  }
+
+  #savePicnicSpend(id: string, date: string, d: { orders: { status: string; checkoutTotalPrice: number; promotionSavings: number; membershipSavings: number; items: { name: string; quantity: number; displayPrice: number }[] }[] }) {
+    const orders = d.orders.filter(o => o.status !== 'CANCELLED');
+    const prev = this.store.spend(id);
+    const savings = orders.reduce((sum, o) => sum + (o.promotionSavings || 0) + (o.membershipSavings || 0), 0);
+    this.store.saveSpend({
+      ...prev, id, source: 'picnic', date,
+      totalCents: orders.reduce((sum, o) => sum + (o.checkoutTotalPrice || 0), 0) || prev?.totalCents || 0,
+      lines: orders.flatMap(o => o.items.map(i => ({ name: i.name, quantity: i.quantity, cents: Math.round(i.displayPrice || 0) }))),
+      ...(savings > 0 ? { savingsCents: savings } : {}),
+    });
+  }
+
+  /** Een AH-bon in het uitgavenboek; de bonusregels worden op naam aan de producten gekoppeld. */
+  #saveAhSpend(receiptId: string, date: string, totalCents: number | null, lines: AhReceiptLine[], discounts: AhDiscount[] | null) {
+    const id = 'ah:' + receiptId;
+    const prev = this.store.spend(id);
+    const mapped = lines.map(l => ({ name: l.name, quantity: l.quantity || 1, cents: Math.round((l.amount ?? 0) * 100) }));
+    const found = discounts ? matchDiscounts(mapped, discounts.map(d => ({ name: d.name, cents: Math.round(d.amount * 100) })).filter(d => d.cents)) : prev?.discounts;
+    this.store.saveSpend({ ...prev, id, source: 'ah', date, totalCents: totalCents ?? prev?.totalCents ?? mapped.reduce((sum, l) => sum + l.cents, 0), lines: mapped, ...(found ? { discounts: found } : {}) });
+  }
+
+  /** Het overzicht voor de Budget-tab: één periode, met de trend ervoor. */
+  budgetOverview(input: { period?: unknown; offset?: unknown } = {}) {
+    const period: Period = input.period === 'week' || input.period === 'year' ? input.period : 'month';
+    const offset = Math.max(-600, Math.min(0, Math.round(Number(input.offset) || 0)));
+    const today = localDate(this.now());
+    const range = periodRange(period, today, offset);
+    const spends = this.store.spends(range.start, range.end);
+    const counted = spends.filter(s => !s.excluded);
+    const label = this.#labeler();
+    const summary = summarize(counted, label);
+    const settings = this.budgetSettings();
+    const budget = budgetFor(period, settings.monthCents);
+    const current = today >= range.start && today <= range.end;
+    const elapsed = current ? Math.round((Date.parse(today) - Date.parse(range.start)) / day) + 1 : range.days;
+    const first = this.store.firstSpendDate();
+    const n = period === 'year' ? Math.min(8, Math.max(1, Number(range.start.slice(0, 4)) - Number((first ?? range.start).slice(0, 4)) + 1)) : 12;
+    const ranges = Array.from({ length: n }, (_, i) => ({ ...periodRange(period, today, offset - (n - 1 - i)), offset: offset - (n - 1 - i) }));
+    const previous = periodRange(period, today, offset - 1);
+    const totals = this.store.spendTotals(ranges[0].start < previous.start ? ranges[0].start : previous.start, range.end);
+    const sum = (r: { start: string; end: string }) => totals.reduce((s, t) => t.date >= r.start && t.date <= r.end ? s + t.cents : s, 0);
+    const persons = Math.max(1, this.household.adults + this.household.children + this.household.toddlers);
+    const index = [...this.store.spendIndex('picnic').values(), ...this.store.spendIndex('ah').values()];
+    const sync = this.store.get<{ at: number; errors: string[] } | null>('spendSync', null);
+    return {
+      period, offset, range, current, elapsed, today,
+      budget, monthBudget: settings.monthCents, customBudget: settings.custom,
+      ...summary,
+      previousCents: sum(previous), previousLabel: previous.label,
+      forecastCents: current && elapsed < range.days && summary.totalCents ? Math.round(summary.totalCents / elapsed * range.days) : null,
+      perPersonDayCents: Math.round(summary.totalCents / persons / elapsed),
+      persons,
+      trend: ranges.map(r => ({ label: r.short, title: r.label, offset: r.offset, cents: sum(r), budget: budgetFor(period, settings.monthCents) })),
+      limits: Object.fromEntries(Object.entries(settings.limits).map(([k, v]) => [k, budgetFor(period, v ?? 0)])),
+      monthLimits: settings.limits,
+      products: summary.products.slice(0, 200),
+      unlabeled: summary.products.filter(p => !p.by).length,
+      priceChanges: priceChanges(this.store.spends(addDays(range.end, -365), range.end).filter(s => !s.excluded)).slice(0, 10),
+      purchases: [...spends].reverse().map(s => ({
+        id: s.id, source: s.source, date: s.date, totalCents: s.totalCents, detailed: !!s.lines, lines: s.lines?.length ?? 0,
+        shop: s.source === 'picnic' ? 'Picnic' : s.source === 'ah' ? 'Albert Heijn' : s.shop ?? 'Overig', note: s.note ?? null, category: s.category ?? null, excluded: !!s.excluded,
+      })),
+      categoryList: budgetCategories.map(c => ({ key: c.key, label: c.label, kind: c.kind })),
+      sync: { at: sync?.at ?? null, errors: sync?.errors ?? [], pending: index.filter(v => !v.detailed).length, total: index.length, sources: { picnic: this.picnic.ready(), ah: this.ah.linked } },
+    };
+  }
+
+  /** De regels van één aankoop, met hoe elk product meetelt. */
+  spendDetail(id: string) {
+    const spend = this.store.spend(String(id));
+    check(spend, 'Onbekende aankoop.', 404);
+    const label = this.#labeler();
+    const bonus = bonusPerLine(spend);
+    return {
+      ...spend,
+      lines: spend.lines?.map((l, i) => {
+        const adjustment = adjustmentLine.test(l.name) || l.cents < 0;
+        const found = adjustment ? null : label(l.name);
+        return {
+          ...l, adjustment, category: found?.category ?? null, kind: found?.kind ?? null, by: found?.by ?? null,
+          bonusCents: bonus.perLine.get(i) ?? 0, bonusNames: (spend.discounts ?? []).filter(d => d.line === i).map(d => d.name),
+        };
+      }) ?? null,
+      /** Bonusregels die Weekmand niet aan een product kon koppelen. */
+      looseDiscounts: (spend.discounts ?? []).filter(d => d.line === null || !spend.lines?.[d.line]),
+    };
+  }
+
+  /** Productnamen die nog niet ingedeeld zijn (geen eigen keuze, AI, regel of catalogus). */
+  unlabeledProducts(includeAsked = false) {
+    const label = this.#labeler();
+    // Pas na drie pogingen zonder antwoord laat Weekmand een product rusten (tot je zelf op "AI indelen" tikt).
+    const tries = this.store.get<Record<string, number>>('productLabelTries', {});
+    const asked = new Set(includeAsked ? [] : Object.keys(tries).filter(k => tries[k] >= 3));
+    const names = new Map<string, string>();
+    const today = localDate(this.now());
+    for (const s of this.store.spends(addDays(today, -3 * 366), today)) {
+      for (const l of s.lines ?? []) {
+        const key = labelKey(l.name);
+        if (l.cents <= 0 || adjustmentLine.test(l.name) || names.has(key) || asked.has(key) || label(l.name)) continue;
+        names.set(key, l.name);
+      }
+    }
+    return [...names.values()];
+  }
+
+  /** Laat de AI producten indelen (categorie, en of het nodig of extra is). Zonder AI: niets (force: 409). */
+  async labelProducts(options: { force?: boolean } = {}) {
+    const names = this.unlabeledProducts(options.force);
+    if (!names.length) return { labeled: 0, remaining: 0 };
+    if (!this.productClassifier) {
+      check(!options.force, 'Koppel eerst een AI (Meer → AI-aanbieder) om producten te laten indelen.', 409);
+      return { labeled: 0, remaining: names.length };
+    }
+    // Kleine porties: een lange lijst past niet in één antwoord en komt dan maar half terug.
+    let labeled = 0, asked = 0;
+    for (let i = 0; i < Math.min(names.length, 100); i += 25) {
+      const batch = names.slice(i, i + 25);
+      const answers = await this.productClassifier(batch);
+      if (!answers) break;
+      labeled += this.#saveProductLabels(batch, answers);
+      asked += batch.length;
+    }
+    return { labeled, remaining: names.length - asked };
+  }
+
+  #saveProductLabels(batch: string[], answers: { name: string; category: BudgetCategory; kind: SpendKind }[]) {
+    const wanted = new Set(batch.map(labelKey));
+    const answered = new Set<string>();
+    let labeled = 0;
+    this.store.update<Record<string, ProductLabel>>('productLabels', {}, saved => {
+      for (const a of answers) {
+        const key = labelKey(String(a.name ?? ''));
+        if (!wanted.has(key) || !categoryKeys.includes(a.category) || !kindKeys.includes(a.kind)) continue;
+        answered.add(key);
+        if (saved[key]?.by === 'user') continue;
+        saved[key] = { category: a.category, kind: a.kind, by: 'ai' };
+        labeled++;
+      }
+      return saved;
+    });
+    this.store.update<Record<string, number>>('productLabelTries', {}, tries => {
+      for (const key of wanted) if (answered.has(key)) delete tries[key]; else tries[key] = (tries[key] ?? 0) + 1;
+      return tries;
+    });
+    return labeled;
+  }
+
+  setProductLabel(input: { name?: unknown; category?: unknown; kind?: unknown }) {
+    const name = String(input.name ?? '').trim();
+    check(name && name.length <= 200, 'Geen product.');
+    const category = String(input.category) as BudgetCategory;
+    check(categoryKeys.includes(category), 'Onbekende categorie.');
+    const kind = (input.kind ? String(input.kind) : kindOf(category)) as SpendKind;
+    check(kindKeys.includes(kind), 'Kies nodig, extra of geen-eten.');
+    this.store.update<Record<string, ProductLabel>>('productLabels', {}, saved => ({ ...saved, [labelKey(name)]: { category, kind, by: 'user' } }));
+    return { name, category, kind };
+  }
+
+  /** Een uitgave buiten Picnic en AH (markt, bakker, andere supermarkt). Negatief bedrag = terugbetaling. */
+  addExpense(input: { date?: unknown; amount?: unknown; shop?: unknown; category?: unknown; note?: unknown }) {
+    const today = localDate(this.now());
+    const date = typeof input.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input.date) ? input.date : today;
+    check(date <= today && date >= addDays(today, -5 * 366), 'Kies een datum in de afgelopen vijf jaar.');
+    const amount = Number(String(input.amount ?? '').replace(',', '.'));
+    check(Number.isFinite(amount) && amount !== 0 && Math.abs(amount) <= 5000, 'Vul een bedrag in (maximaal € 5.000).');
+    const category = (input.category ? String(input.category) : 'overig') as BudgetCategory;
+    check(categoryKeys.includes(category), 'Onbekende categorie.');
+    const shop = String(input.shop ?? '').trim().slice(0, 60) || 'Overig';
+    const note = String(input.note ?? '').trim().slice(0, 120);
+    const spend: Spend = { id: 'manual:' + randomUUID().slice(0, 8), source: 'manual', date, totalCents: Math.round(amount * 100), shop, category, ...(note ? { note } : {}) };
+    this.store.saveSpend(spend);
+    return spend;
+  }
+
+  /**
+   * Foto van een kassabon (data-URL) laten lezen door de AI. Slaat nog niets op: de gebruiker
+   * controleert winkel, datum, totaal en regels eerst.
+   */
+  async previewReceiptPhoto(dataUrl: unknown) {
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl ?? ''));
+    check(m, 'Kies een foto (jpg, png of webp).');
+    check(m[2].length <= 8_000_000, 'De foto is te groot. Maak hem kleiner of dichterbij.');
+    check(this.receiptReader, 'Koppel eerst een AI (Meer → AI-aanbieder) om bonnetjes te lezen.', 409);
+    const today = localDate(this.now());
+    const read = await this.receiptReader({ mediaType: m[1] as ImageInput['mediaType'], data: m[2] }, today);
+    check(read, 'Koppel eerst een AI (Meer → AI-aanbieder) om bonnetjes te lezen.', 409);
+    check(read.lines.length, 'Op deze foto kon de AI geen kassabon lezen. Probeer een scherpere foto, recht van boven, met de hele bon erop.', 422);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(read.date) && read.date <= today && read.date >= addDays(today, -5 * 366) ? read.date : today;
+    const shop = read.shop && read.shop === read.shop.toUpperCase() ? read.shop.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase()) : read.shop || 'Onbekende winkel';
+    const sumCents = read.lines.reduce((s, l) => s + l.cents, 0) + read.discounts.reduce((s, d) => s + d.cents, 0);
+    const totalCents = read.totalCents > 0 ? read.totalCents : sumCents;
+    return { ...read, shop, date, totalCents, sumCents, duplicate: this.#sameSpend(date, totalCents) };
+  }
+
+  /** Een aankoop op dezelfde dag met hetzelfde bedrag (bijv. een AH-bon die ook uit de app komt). */
+  #sameSpend(date: string, totalCents: number) {
+    const s = this.store.spends(date, date).find(x => Math.abs(x.totalCents - totalCents) <= 1);
+    return s ? { id: s.id, shop: s.source === 'picnic' ? 'Picnic' : s.source === 'ah' ? 'Albert Heijn' : s.shop ?? 'Overig', date: s.date, totalCents: s.totalCents } : null;
+  }
+
+  /** De gecontroleerde bon opslaan; met pantry ook de producten bij de voorraad tellen. */
+  saveReceiptPhoto(input: { shop?: unknown; date?: unknown; totalCents?: unknown; lines?: unknown; discounts?: unknown; pantry?: unknown; force?: unknown }) {
+    const today = localDate(this.now());
+    const date = typeof input.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input.date) ? input.date : '';
+    check(date && date <= today && date >= addDays(today, -5 * 366), 'Kies een datum in de afgelopen vijf jaar.');
+    const totalCents = Math.round(Number(input.totalCents));
+    check(Number.isFinite(totalCents) && totalCents !== 0 && Math.abs(totalCents) <= 500_000, 'Vul het totaal van de bon in.');
+    const raw = Array.isArray(input.lines) ? input.lines.slice(0, 200) : [];
+    const lines = raw.flatMap((l: any) => l && typeof l.name === 'string' && l.name.trim() && Number.isFinite(Number(l.cents))
+      ? [{ name: l.name.trim().slice(0, 80), quantity: Number(l.quantity) > 0 ? Math.min(999, Number(l.quantity)) : 1, cents: Math.round(Number(l.cents)) }] : []);
+    check(lines.length, 'Er staan geen producten op deze bon.');
+    const discounts = (Array.isArray(input.discounts) ? input.discounts.slice(0, 50) : []).flatMap((d: any) => d && typeof d.name === 'string' && Number(d.cents)
+      ? [{ name: d.name.trim().slice(0, 80), cents: -Math.abs(Math.round(Number(d.cents))) }] : []);
+    const duplicate = this.#sameSpend(date, totalCents);
+    check(!duplicate || input.force === true, `Deze bon lijkt er al te staan (${duplicate?.shop}, ${duplicate?.date}).`, 409);
+    const shop = String(input.shop ?? '').trim().slice(0, 60) || 'Onbekende winkel';
+    const spend: Spend = { id: 'photo:' + randomUUID().slice(0, 8), source: 'manual', date, totalCents, shop, note: 'foto van de bon', lines, ...(discounts.length ? { discounts: matchDiscounts(lines, discounts) } : {}) };
+    this.store.saveSpend(spend);
+    // De indeling die de AI bij het lezen gaf, bewaren (een eigen keuze gaat voor).
+    this.store.update<Record<string, ProductLabel>>('productLabels', {}, saved => {
+      for (const l of raw as any[]) {
+        const key = labelKey(String(l?.name ?? ''));
+        if (!key || saved[key]?.by === 'user' || !categoryKeys.includes(l?.category) || !kindKeys.includes(l?.kind)) continue;
+        saved[key] = { category: l.category, kind: l.kind, by: 'ai' };
+      }
+      return saved;
+    });
+    let pantry: { counted: string[]; unmatched: string[] } | null = null;
+    if (input.pantry === true) {
+      pantry = this.#addBought(lines.filter(l => l.cents > 0).map(l => ({ name: l.name, quantity: l.quantity, amount: l.cents / 100 })));
+      this.changed();
+    }
+    return { spend, pantry };
+  }
+
+  removeExpense(id: string) {
+    const spend = this.store.spend(String(id));
+    check(spend && spend.source === 'manual', 'Alleen zelf ingevoerde uitgaven kun je verwijderen; een bon kun je wel niet laten meetellen.');
+    this.store.deleteSpend(spend.id);
+  }
+
+  /** Een bon niet meetellen (bijv. een cadeau of iets voor het werk), of weer wel. */
+  excludeSpend(id: string, excluded: boolean) {
+    const spend = this.store.spend(String(id));
+    check(spend, 'Onbekende aankoop.', 404);
+    const { excluded: _old, ...rest } = spend;
+    this.store.saveSpend(excluded ? { ...rest, excluded: true } : rest);
+  }
+
+  budgetCsv(input: { from?: unknown; to?: unknown } = {}) {
+    const today = localDate(this.now());
+    const valid = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    const from = valid(input.from) ? String(input.from) : addDays(today, -3 * 366);
+    const to = valid(input.to) ? String(input.to) : today;
+    return toCsv(this.store.spends(from, to).filter(s => !s.excluded), this.#labeler());
+  }
+
+  /** Seintje bij 80% en 100% van een zelf ingesteld maandbudget, en bij een overschreden limiet. */
+  budgetAlerts() {
+    const settings = this.budgetSettings();
+    const limits = Object.entries(settings.limits).filter(([, v]) => v);
+    if (!settings.custom && !limits.length) return;
+    const range = periodRange('month', localDate(this.now()));
+    const summary = summarize(this.store.spends(range.start, range.end).filter(s => !s.excluded), this.#labeler());
+    if (settings.custom) {
+      const share = summary.totalCents / settings.monthCents;
+      if (share >= 1) this.notify({ key: `budget-${range.start}-100`, text: `Het boodschappenbudget voor ${range.label} is op: ${euro(summary.totalCents)} uitgegeven van ${euro(settings.monthCents)}.` });
+      else if (share >= 0.8) this.notify({ key: `budget-${range.start}-80`, text: `${Math.round(share * 100)}% van het boodschappenbudget voor ${range.label} is uitgegeven: ${euro(summary.totalCents)} van ${euro(settings.monthCents)}, nog ${euro(settings.monthCents - summary.totalCents)} over.` });
+    }
+    for (const [category, limit] of limits) {
+      const spent = summary.categories.find(c => c.key === category)?.cents ?? 0;
+      const name = budgetCategories.find(c => c.key === category)?.label.toLowerCase() ?? category;
+      if (spent > limit!) this.notify({ key: `budget-${range.start}-${category}`, text: `De limiet voor ${name} in ${range.label} is overschreden: ${euro(spent)} van ${euro(limit!)}.` });
+    }
   }
 
   // ───────────── Voorstellen uit gewoontes ─────────────

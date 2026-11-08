@@ -70,6 +70,29 @@ export class Scheduler {
           await app.refreshPrices().catch(error => console.error('Prijzen:', error.message));
         }
       }
+      // Elke vier uur nieuwe AH-kassabonnen; houdt meteen de AH-koppeling actief.
+      if (app.ah.linked && app.now() - app.store.get<number>('ahLastTry', 0) > 4 * 36e5) {
+        app.store.set('ahLastTry', app.now());
+        const result = await app.importAhReceipts().catch(error => { console.error('AH-kassabonnen:', error.message); return null; });
+        for (const r of result?.receipts ?? []) {
+          app.notify({ key: 'ah-receipt-' + r.id, text: `AH-kassabon van ${r.date.slice(0, 10)}: ${r.counted.length} producten bij de voorraad geteld${r.unmatched.length ? `, ${r.unmatched.length} niet herkend (${r.unmatched.slice(0, 3).join(', ')}${r.unmatched.length > 3 ? ', …' : ''}). Koppel ze onder Meer → Albert Heijn.` : ''}.` });
+        }
+      }
+      // Onbekende bonregels die de AI nog niet zag (ook van vóór een update): hooguit eens per uur.
+      if (app.ah.linked && app.now() - app.store.get<number>('receiptMatchLastTry', 0) > 36e5 && app.unmatchedReceiptLines().length) {
+        app.store.set('receiptMatchLastTry', app.now());
+        const r = await app.matchReceiptLines().catch(error => { console.error('Bonregels koppelen:', error.message); return null; });
+        if (r?.matched.length) {
+          app.notify({ text: `De AI heeft ${r.matched.length} ${r.matched.length === 1 ? 'regel' : 'regels'} van je AH-bonnen herkend en bij de voorraad geteld${r.unknown.length ? `; ${r.unknown.length} bleef onbekend (${r.unknown.slice(0, 3).join(', ')}). Koppel die zelf onder Meer → Albert Heijn.` : '.'}` });
+        }
+      }
+      // Budget, elk uur: nieuwe aankopen, een paar oudere bonnen uitsplitsen, producten laten indelen, seintje bij het budget.
+      if (app.now() - app.store.get<number>('spendLastTry', 0) > 36e5) {
+        app.store.set('spendLastTry', app.now());
+        if (app.picnic.ready() || app.ah.linked) await app.syncSpending().catch(error => console.error('Budget:', error.message));
+        await app.labelProducts().catch(error => console.error('Producten indelen:', error.message));
+        app.budgetAlerts();
+      }
       if (weekday(today) === 0 && app.store.get<string>('lastMaintenance', '') !== today && new Date(app.now()).getUTCHours() >= 2) {
         app.store.set('lastMaintenance', today);
         app.store.maintain(new Date(app.now() - 90 * 86_400_000).toISOString());

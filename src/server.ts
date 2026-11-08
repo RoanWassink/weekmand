@@ -9,13 +9,14 @@ import { Weekmand } from './app.ts';
 import { Assistant } from './assistant.ts';
 import { Accounts, cookieValue, sessionDays } from './auth.ts';
 import { Store } from './db.ts';
+import { PICNIC_IMAGE_ORIGIN } from './shop.ts';
 import { check, Problem } from './errors.ts';
 import { HomeAssistantBridge } from './homeassistant.ts';
 import { handleMcp, openApi, version } from './mcp.ts';
 import { Scheduler, wireNotices } from './scheduler.ts';
 import type { StoredNotice } from './scheduler.ts';
 import { Secrets } from './secrets.ts';
-import { TelegramBot } from './telegram.ts';
+import { reviewButtons, TelegramBot } from './telegram.ts';
 import { planSummary, runTool } from './tools.ts';
 
 // ───────────── Opstarten ─────────────
@@ -27,6 +28,10 @@ const secrets = new Secrets(dbPath === ':memory:' ? null : process.env.SECRETS_P
 const app = new Weekmand({ store, secrets });
 const accounts = new Accounts(store);
 const assistant = new Assistant(app);
+app.receiptMatcher = (lines, ingredients) => assistant.matchReceiptLines(lines, ingredients);
+app.productClassifier = names => assistant.classifyProducts(names);
+app.receiptReader = (image, today) => assistant.readReceiptPhoto(image, today);
+app.recipeAdapter = (recipe, note) => assistant.adaptRecipe(recipe, note);
 const publicUrl = process.env.PUBLIC_URL;
 wireNotices(app, publicUrl);
 
@@ -134,11 +139,11 @@ async function state(req: IncomingMessage) {
   return {
     version, canConfigure: configure, household: app.household, user: uiUser(req), accounts: accounts.list(),
     shop: { mode: app.shopMode, label: app.shop.label, ready: app.shop.ready(), picnic: app.picnic.status, remembered: app.picnic.remembered },
-    ai: assistant.status(), menu, delivery, pantry,
+    ah: app.ahStatus(), ai: assistant.status(), menu, delivery, pantry,
     order: app.order, regulars: app.regulars(), links: app.shopMode === 'picnic' ? app.links() : [],
     suggestions: app.suggestions(), rules: app.avoid.map(r => app.describeRule(r)),
     notices: store.get<StoredNotice[]>('notices', []).slice(0, 10),
-    telegram: { configured: !!telegram, bot: telegram?.botName ?? null, chats: telegram?.state.chats ?? [], error: telegram?.lastError ?? null, fromEnv: !!process.env.TELEGRAM_BOT_TOKEN },
+    telegram: { configured: !!telegram, bot: telegram?.botName ?? null, chats: telegram?.chats() ?? [], share: telegram?.shareMode ?? 'changes', error: telegram?.lastError ?? null, fromEnv: !!process.env.TELEGRAM_BOT_TOKEN },
     mqtt: { configured: !!mqtt, connected: mqtt?.connected ?? false, error: mqtt?.lastMessage ?? null },
     history: store.get('picnicHistory', null),
     tags: [...new Set(app.catalog.recipes().flatMap(r => r.tags))].sort(),
@@ -148,11 +153,20 @@ async function state(req: IncomingMessage) {
 
 type Handler = (input: Record<string, any>, req: IncomingMessage) => Promise<unknown> | unknown;
 const ui: Record<string, Handler> = {
-  plan: async () => { const plan = await app.plan(); return { plan, summary: planSummary(plan) }; },
-  'plan/current': async () => { const plan = await app.currentPlan(); return { plan, summary: planSummary(plan) }; },
+  plan: async () => { const plan = await app.plan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
+  'plan/current': async () => { const plan = await app.currentPlan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
+  product: async i => app.productInfo(String(i.id ?? '')),
   apply: async i => app.applyPlan(String(i.id)),
   action: async i => handleAction(app, String(i.data)),
-  chat: async i => assistant.chat('web', String(i.message ?? ''), 'web'),
+  chat: async (i, req) => {
+    const before = app.revision;
+    const message = String(i.message ?? '');
+    const result = await assistant.chat('web', message, 'web');
+    // Wat in de webapp verandert, lezen de gekoppelde Telegram-chats mee (Meer → Telegram → Antwoorden delen).
+    const who = uiUser(req);
+    void telegram?.share(null, who && !['lokaal', 'weekmand', 'api'].includes(who) ? who : 'Iemand in de webapp', message, result.reply, app.revision !== before || !!result.reviewId, reviewButtons(result.reviewId));
+    return result;
+  },
   'chat/history': () => store.chat('web', 30),
   'chat/clear': () => { store.clearChat('web'); return {}; },
   household: i => app.setHousehold(i),
@@ -171,9 +185,13 @@ const ui: Record<string, Handler> = {
   recipes: i => app.listRecipes(String(i.query ?? ''), String(i.tag ?? '')),
   recipe: i => app.recipeDetail(String(i.id), i.servings),
   'recipe/add': i => app.catalog.addRecipe(obj(i.recipe) as any, 'user'),
+  'recipe/import-preview': async i => app.previewRecipeFromUrl(String(i.url ?? '')),
+  'recipe/import-text': i => app.previewRecipeFromText({ name: i.name, servings: i.servings, text: i.text }),
+  'recipe/import-save': i => app.saveImportedRecipe(obj(i.preview) as any, Array.isArray(i.skip) ? i.skip.map(String) : []),
   'recipe/delete': i => { app.catalog.deleteRecipe(String(i.id)); return {}; },
   'meal/set': async i => app.setMeal({ date: String(i.date), recipeId: String(i.recipeId), servings: i.servings }),
   'meal/swap': async i => app.swapMeal(String(i.date), String(i.wish ?? '')),
+  'meal/replace': async i => ({ replaced: await app.replaceMeals({ dates: i.dates, note: i.note }) }),
   'meal/remove': i => { app.removeMeal(String(i.date)); return {}; },
   'menu/propose': async i => app.proposeMenu({ wish: String(i.wish ?? ''), replace: !!i.replace }),
   'menu/approve': async () => ({ approved: await app.approveMenu() }),
@@ -209,6 +227,24 @@ const ui: Record<string, Handler> = {
   'picnic/import': async () => app.importHistory(),
   'picnic/recipes': async () => app.importPicnicRecipes(),
   'picnic/recipe-list': () => app.picnicRecipes(),
+  'ah/link': async (i, req) => { requireConfigure(req); return app.linkAh(String(i.code ?? '')); },
+  'ah/unlink': (_i, req) => { requireConfigure(req); app.unlinkAh(); return {}; },
+  'ah/proposal': async () => app.ahListProposal(),
+  'ah/send': async i => app.sendToAhList({ ids: Array.isArray(i.ids) ? i.ids.map(String) : undefined, extra: Array.isArray(i.extra) ? i.extra.map(String) : [] }),
+  'ah/receipts': async () => app.importAhReceipts(),
+  'ah/match': async () => app.matchReceiptLines({ force: true }),
+  'ah/map': i => app.mapReceiptLine(String(i.name ?? ''), i.ingredient === null ? null : String(i.ingredient ?? '')),
+  budget: i => app.budgetOverview({ period: i.period, offset: i.offset }),
+  'budget/sync': async () => { const r = await app.syncSpending({ details: 12 }); await app.labelProducts().catch(() => null); return r; },
+  'budget/label': async () => app.labelProducts({ force: true }),
+  'budget/product': i => app.setProductLabel(i),
+  'budget/spend': i => app.spendDetail(String(i.id ?? '')),
+  'budget/expense': i => app.addExpense(i),
+  'budget/expense/remove': i => { app.removeExpense(String(i.id ?? '')); return {}; },
+  'budget/exclude': i => { app.excludeSpend(String(i.id ?? ''), !!i.excluded); return {}; },
+  'budget/settings': i => app.setBudget({ month: i.month, limit: i.limit }),
+  'budget/photo': async i => app.previewReceiptPhoto(i.image),
+  'budget/photo/save': i => app.saveReceiptPhoto(i),
   'ai/connect': async (i, req) => { requireConfigure(req); return assistant.connect(obj(i) as any); },
   'ai/disconnect': (_i, req) => { requireConfigure(req); assistant.disconnect(); return {}; },
   'telegram/token': (i, req) => {
@@ -220,6 +256,7 @@ const ui: Record<string, Handler> = {
   },
   'telegram/pair': (_i, req) => { requireConfigure(req); check(telegram, 'Stel eerst een Telegram-bot in.'); return { code: telegram.pairingCode(), bot: telegram.botName }; },
   'telegram/unpair': (i, req) => { requireConfigure(req); telegram?.unpair(Number(i.chat)); return {}; },
+  'telegram/share': (i, req) => { requireConfigure(req); check(telegram, 'Geen Telegram-bot ingesteld.'); telegram.setShareMode(String(i.mode)); return {}; },
   'telegram/remove': (_i, req) => { requireConfigure(req); secrets.set('telegramToken', undefined); startTelegram(); return {}; },
   'telegram/test': async () => { check(telegram, 'Geen Telegram-bot ingesteld.'); await telegram.broadcast({ text: 'Testbericht van Weekmand. Werkt!' }); return {}; },
   'cutoff/test': async () => { const { cutoffNotice } = await import('./actions.ts'); const n = await cutoffNotice(app); check(n, 'Geen bezorgmoment bekend.'); app.notify({ ...n, key: undefined }); return n; },
@@ -272,7 +309,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' blob: data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', `default-src 'self'; img-src 'self' blob: data: ${PICNIC_IMAGE_ORIGIN}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
   const url = new URL(req.url ?? '/', 'http://x');
   const route = url.pathname;
   try {
@@ -306,10 +343,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     if (route.startsWith('/api/auth/')) return await auth(route.slice(10), req, res);
     if (!uiAllowed(req)) return json(res, 401, { error: 'Log eerst in.', login: true });
     if (req.method === 'GET' && route === '/api/state') return json(res, 200, await state(req));
+    if (req.method === 'GET' && route === '/api/budget.csv') {
+      res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="weekmand-uitgaven-${new Date().toISOString().slice(0, 10)}.csv"`, 'Cache-Control': 'no-store' });
+      return res.end(app.budgetCsv({ from: url.searchParams.get('from'), to: url.searchParams.get('to') }));
+    }
     if (req.method === 'POST' && route.startsWith('/api/ui/')) {
       const handler = Object.hasOwn(ui, route.slice(8)) ? ui[route.slice(8)] : null;
       if (!handler) throw new Problem(404, 'Onbekend adres.');
-      const result = await handler(obj(await body(req)), req);
+      // Een foto van een bon mag groter zijn dan een gewoon verzoek.
+      const result = await handler(obj(await body(req, route === '/api/ui/budget/photo' ? 9_000_000 : undefined)), req);
       return json(res, 200, result ?? {});
     }
     return json(res, 404, { error: 'Onbekend adres.' });

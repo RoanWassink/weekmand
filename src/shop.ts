@@ -5,7 +5,15 @@ import { Problem } from './errors.ts';
 import { importDeliveries } from './picnic-history.ts';
 import type { Secrets } from './secrets.ts';
 import { addDays, localDate, zonedTime } from './time.ts';
-import type { CartLine, DeliverySlot, IngredientDef, ShopCart, ShopProduct } from './types.ts';
+import type { CartLine, DeliverySlot, IngredientDef, ProductDetails, ShopCart, ShopProduct } from './types.ts';
+
+/** Productfoto's van Picnic zijn openbaar (geen sessiesleutel). De CSP van de webapp staat deze bron toe. */
+export const PICNIC_IMAGE_ORIGIN = 'https://storefront-prod.nl.picnicinternational.com';
+const imageId = (id: unknown) => typeof id === 'string' && /^[A-Za-z0-9_-]{6,128}$/.test(id) ? id : undefined;
+/** Productomschrijving zonder markdown, kort genoeg voor het productvenster. */
+const plainText = (text: unknown) => typeof text === 'string'
+  ? text.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_#>`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 500)
+  : '';
 
 /** Alles wat Weekmand van een winkel nodig heeft. Er is geen checkout of betaalroute. */
 export interface Shop {
@@ -143,6 +151,9 @@ export class PicnicShop implements Shop {
   #expired = false;
   #secrets: Secrets;
   onExpired: (() => void) | null = null;
+  /** Gemeld bij het lezen van de mand en bij zoeken: product-id → afbeelding-id. */
+  onImages: ((images: Record<string, string>) => void) | null = null;
+  #details = new Map<string, { at: number; value: ProductDetails }>();
 
   constructor(secrets: Secrets, makeClient = (authKey?: string) => new PicnicClient({ countryCode: 'NL', ...(authKey ? { authKey } : {}) })) {
     this.#secrets = secrets;
@@ -258,11 +269,16 @@ export class PicnicShop implements Shop {
       const existing = lines.get(item.productId);
       if (existing) existing.quantity += item.quantity;
       // display_price is de prijs van de hele regel; de stuksprijs is regelprijs / aantal.
-      else lines.set(item.productId, {
-        id: item.productId, name: item.name, unitQuantity: item.unitQuantity, quantity: item.quantity,
-        cents: Math.round(item.displayPrice / item.quantity), available: !item.isUnavailable,
-      });
+      else {
+        const image = imageId(item.imageId);
+        lines.set(item.productId, {
+          id: item.productId, name: item.name, unitQuantity: item.unitQuantity, quantity: item.quantity,
+          cents: Math.round(item.displayPrice / item.quantity), available: !item.isUnavailable,
+          ...(image ? { image } : {}), ...(item.basePrice ? { unitPrice: String(item.basePrice) } : {}),
+        });
+      }
     }
+    this.#noteImages([...lines.values()]);
     return { id: raw.id, lines: [...lines.values()], totalCents: raw.totalPrice, recipes: (raw.recipes ?? []).map(r => ({ id: r.id, title: r.title })) };
   }
 
@@ -275,14 +291,45 @@ export class PicnicShop implements Shop {
       const result = await c.catalog.getSearchResults(query);
       const products: ShopProduct[] = [];
       for (const section of result.products?.sections ?? []) for (const p of section.products) {
-        if (!p.id || !p.name || !Number.isSafeInteger(p.displayPrice)) continue;
+        if (products.length >= 15 || !p.id || !p.name || !Number.isSafeInteger(p.displayPrice)) continue;
         const tiers = (p.priceRanges ?? []).map((r: any) => ({ from: Number(r.from_quantity ?? r.fromQuantity), cents: Number(r.price) })).filter(t => t.from > 1 && t.cents > 0);
         const promo = p.labels?.find(l => l.type === 'PROMO' && l.text)?.text ?? undefined;
-        products.push({ id: p.id, name: p.name, unitQuantity: p.unitQuantity, cents: p.displayPrice, available: !p.isUnavailable, ...(tiers.length ? { tiers } : {}), ...(promo ? { promo } : {}) });
-        if (products.length >= 15) return products;
+        const image = imageId(p.imageId);
+        products.push({
+          id: p.id, name: p.name, unitQuantity: p.unitQuantity, cents: p.displayPrice, available: !p.isUnavailable, ...(tiers.length ? { tiers } : {}), ...(promo ? { promo } : {}),
+          ...(image ? { image } : {}), ...(p.unitPrice ? { unitPrice: p.unitPrice } : {}), ...(p.brand ? { brand: p.brand } : {}),
+        });
       }
+      this.#noteImages(products);
       return products;
     });
+  }
+
+  /** De productpagina van Picnic (merk, omschrijving, foto), voor het productvenster. Een uur onthouden. */
+  async product(id: string): Promise<ProductDetails> {
+    const hit = this.#details.get(id);
+    if (hit && Date.now() - hit.at < 3_600_000) return hit.value;
+    return this.#call(async c => {
+      const p = await c.catalog.getProduct(id);
+      const image = imageId(p.imageIds?.[0]);
+      const description = plainText(p.description);
+      const labels = (p.labels ?? []).map(l => l.text).filter(Boolean);
+      const value: ProductDetails = {
+        id, name: p.name, unitQuantity: p.unitQuantity, cents: p.displayPrice, available: true,
+        ...(image ? { image } : {}), ...(p.unitPrice ? { unitPrice: p.unitPrice } : {}), ...(p.brand ? { brand: p.brand } : {}),
+        ...(description ? { description } : {}), ...(labels.length ? { labels } : {}),
+      };
+      if (this.#details.size >= 200) this.#details.clear();
+      this.#details.set(id, { at: Date.now(), value });
+      this.#noteImages([value]);
+      return value;
+    });
+  }
+
+  #noteImages(products: ShopProduct[]) {
+    const found: Record<string, string> = {};
+    for (const p of products) if (p.image) found[p.id] = p.image;
+    if (Object.keys(found).length) this.onImages?.(found);
   }
 
   slots() {
@@ -296,6 +343,9 @@ export class PicnicShop implements Shop {
   }
 
   history(now = Date.now()) { return this.#call(c => importDeliveries(c.delivery, now)); }
+  /** Alle voltooide bezorgingen met hun totaal (één verzoek), voor het budget. */
+  deliverySummaries() { return this.#call(c => c.delivery.getDeliverySummaries(['COMPLETED'])); }
+  delivery(id: string) { return this.#call(c => c.delivery.getDelivery(id)); }
 
   savedRecipes() { return this.#call(c => c.recipe.getSavedRecipes()); }
   userRecipes() { return this.#call(c => c.recipe.getUserDefinedRecipes()); }

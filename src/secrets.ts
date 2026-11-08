@@ -10,6 +10,8 @@ export type SecretData = {
   picnicAuthKey?: string;
   ai?: { provider: string; key: string; model?: string };
   telegramToken?: string;
+  /** Tokens van het AH-account (geen wachtwoord). */
+  ah?: { accessToken: string; refreshToken: string; expiresAt: number; linkedAt: string };
 };
 
 export class Secrets {
