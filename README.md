@@ -13,15 +13,37 @@ Meer details: [docs/DETAILS.md](docs/DETAILS.md).
 
 ## Instellen
 
-Je hebt Node.js 24.13 of nieuwer nodig.
+Eenmalig, op de computer waarop Weekmand draait:
+
+1. Installeer [Node.js](https://nodejs.org) (versie 24.13 of nieuwer) en [Git](https://git-scm.com).
+2. Open een terminal (op Windows: PowerShell) en kloon de code naar een map van jou:
+
+   ```sh
+   git clone https://github.com/RoanWassink/weekmand.git
+   ```
+
+   Is de repo privé, log dan eerst in met `gh auth login` en gebruik `gh repo clone RoanWassink/weekmand`.
+3. Ga **in de map van Weekmand** staan. `npm start` werkt alleen daar, niet in een willekeurige map:
+
+   ```sh
+   cd weekmand
+   ```
+
+4. Installeer de onderdelen (duurt even):
+
+   ```sh
+   npm ci
+   ```
+
+Daarna starten en openen:
 
 ```sh
-npm ci
-npm test
 npm start
 ```
 
-Open daarna [http://127.0.0.1:8080](http://127.0.0.1:8080). Zonder verdere instellingen draait een demowinkel, zodat je alles kunt uitproberen.
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in je browser. Zonder verdere instellingen draait een demowinkel, zodat je alles kunt uitproberen. Stoppen doe je met Ctrl+C in de terminal.
+
+Een volgende keer hoef je alleen `cd weekmand` en `npm start` te doen.
 
 Onder **Meer** in de app:
 
