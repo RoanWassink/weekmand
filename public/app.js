@@ -16,6 +16,9 @@ let planSeq = 0;
 let planWrites = 0;
 let busy = false;
 let chatLoaded = false;
+/** Het laatste voorstel staat ook op dit apparaat, zodat het na het heropenen van de app meteen in beeld is. */
+const PLAN_KEY = 'weekmand-voorstel';
+let planRestored = false;
 
 // ───────────── Hulpjes ─────────────
 
@@ -196,6 +199,7 @@ let lastLoad = 0;
 async function load() {
   S = await api('/api/state');
   lastLoad = Date.now();
+  if (!planRestored) { planRestored = true; restorePlan(); }
   renderHeader();
   renderWeek();
   renderCart();
@@ -452,10 +456,14 @@ function productDialog(p) {
 }
 
 /** De echte Picnic-mand, altijd zichtbaar. */
+let cartShown = '';
 async function loadCartLines() {
-  if (!S?.shop.ready) { put($('cart-lines'), el('p', { class: 'muted small' }, 'Niet aangemeld bij Picnic.')); return; }
+  if (!S?.shop.ready) { cartShown = ''; put($('cart-lines'), el('p', { class: 'muted small' }, 'Niet aangemeld bij Picnic.')); return; }
   try {
     const cart = await api('cart', {});
+    const shown = JSON.stringify(cart);
+    if (shown === cartShown && $('cart-lines').childElementCount) return;
+    cartShown = shown;
     const mine = cart.lines.reduce((n, l) => n + (l.byWeekmand ? 1 : 0), 0);
     const photos = cart.lines.some(l => l.image);
     put($('cart-lines'),
@@ -472,7 +480,7 @@ async function loadCartLines() {
       }),
       !cart.lines.length ? el('p', { class: 'muted small' }, 'Je Picnic-mand is leeg.') : null);
     applyListSearch('cart-lines');
-  } catch (e) { put($('cart-lines'), el('p', { class: 'warn small' }, e.message)); }
+  } catch (e) { cartShown = ''; put($('cart-lines'), el('p', { class: 'warn small' }, e.message)); }
 }
 
 const amountNl = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 1 });
@@ -521,15 +529,39 @@ function swipeable(node, onSwipe) {
  */
 async function calculate(force = false, { quiet = false } = {}) {
   const seq = ++planSeq;
-  const slow = quiet ? null : setTimeout(() => toast('Bezig met berekenen… Nieuwe producten koppelen bij Picnic kan even duren.'), 1500);
+  const slow = quiet ? null : setTimeout(() => toast('Bezig met berekenen… Je Picnic-mand lezen en nieuwe producten koppelen kan even duren.'), 1500);
   const result = await api(force === true ? 'plan' : 'plan/current', {}).finally(() => clearTimeout(slow));
   // Een nieuwere berekening of een nog lopende wijziging wint; die tekent zelf.
   if (seq !== planSeq || planWrites) return;
+  // Komt er hetzelfde uit, dan alleen de tijd bijwerken: de lijst springt niet en je plek blijft.
+  const same = plan && planSignature(plan) === planSignature(result.plan) && $('plan-read');
   plan = result.plan;
   planStale = false;
-  renderPlan();
+  savePlan();
+  if (same) $('plan-read').textContent = planReadText();
+  else renderPlan();
   loadCartLines();
   renderPantry(); // wat in de mand ligt telt mee in de voorraad
+}
+
+/** Het voorstel zonder id en tijden: gelijk betekent dat er niets te zien veranderde. */
+const planSignature = p => JSON.stringify({ ...p, id: null, computedAt: null, cartReadAt: null });
+const planReadText = () => planStale ? 'Bijwerken…' : `Picnic-mand gelezen om ${timeFmt.format(new Date(plan.cartReadAt ?? plan.computedAt))} · voor het hele huishouden`;
+
+function savePlan() {
+  try { localStorage.setItem(PLAN_KEY, JSON.stringify({ mode: S?.shop.mode, plan })); } catch { /* privévenster of vol */ }
+}
+
+/** Bij het openen van de app: het bewaarde voorstel (hooguit een dag oud) meteen tonen en stil bijwerken. */
+function restorePlan() {
+  if (plan || !S?.shop.ready) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(PLAN_KEY) ?? 'null');
+    const age = Date.now() - Date.parse(saved?.plan?.computedAt);
+    if (saved?.mode !== S.shop.mode || !(age >= 0 && age < 24 * 36e5) || !Array.isArray(saved.plan.lines)) return;
+    plan = saved.plan;
+    planStale = true;
+  } catch { /* geen of kapotte opslag: gewoon opnieuw laden */ }
 }
 
 /** Een regel meteen uit het voorstel halen of terugzetten; de server rekent daarna stil na. */
@@ -612,7 +644,7 @@ function renderPlan() {
     el('h3', {}, changes.length ? `${changes.length} ${changes.length === 1 ? 'wijziging' : 'wijzigingen'} voorgesteld` : 'Je Picnic-mand is compleet'),
     el('p', { class: 'muted small' }, changes.length ? 'Nog niet doorgevoerd. Alleen deze verschillen gaan naar Picnic; wat je zelf in Picnic zet blijft staan.' : 'Alles wat nodig is zit al in je Picnic-mand. Afrekenen doe je in de Picnic-app.'),
     el('p', { class: 'muted small' }, `Voor ${plan.meals.length} maaltijden: ${plan.meals.map(m => m.name).join(', ') || 'geen'}.`),
-    el('div', { class: 'row' }, el('span', { class: 'muted small grow' }, planStale ? 'Bijwerken…' : `Picnic-mand gelezen om ${timeFmt.format(new Date(plan.cartReadAt ?? plan.computedAt))} · voor het hele huishouden`),
+    el('div', { class: 'row' }, el('span', { class: 'muted small grow', id: 'plan-read' }, planReadText()),
       btn('Opnieuw berekenen', () => run(() => calculate(true), { reload: false }), 'small ghost')),
     changes.length ? el('p', { class: 'hint with-icon' }, icon('swipe'), 'Veeg een regel opzij om hem deze keer over te slaan.') : null,
     changes.length ? searchBox('plan-lines', 'Zoek in het voorstel') : null,
@@ -1776,7 +1808,10 @@ function renderAccounts() {
         toast('Wachtwoord gewijzigd. Andere apparaten zijn uitgelogd.');
       });
     } }, el('h3', {}, 'Mijn wachtwoord wijzigen'), myPass, el('button', {}, 'Wijzigen')) : null,
-    btn('Uitloggen', async () => { await fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); location.reload(); }, 'danger'));
+    btn('Uitloggen', async () => {
+      try { localStorage.removeItem(PLAN_KEY); } catch { /* niets bewaard */ }
+      await fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); location.reload();
+    }, 'danger'));
 }
 
 // ───────────── Start ─────────────
