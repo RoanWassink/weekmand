@@ -110,6 +110,12 @@ export class Weekmand {
       if (this.#snapshot) { this.store.set('planSnapshot', null); this.#snapshot = false; }
     });
     this.#migrateV1();
+    // Eenmalig: ingrediënten die vroeger standaard "groente-fruit" kregen (kip als groente, kiprecept "vegetarisch").
+    if (!this.store.get<boolean>('categoriesFixed1', false)) {
+      const fixed = this.catalog.fixGuessedCategories();
+      this.store.set('categoriesFixed1', true);
+      if (fixed.ingredients || fixed.recipes) console.log(`Categorieën rechtgezet: ${fixed.ingredients} ingrediënten, ${fixed.recipes} recepten niet meer vegetarisch.`);
+    }
     // Na een herstart de laatste mandberekening (hooguit tien minuten oud) meteen weer gebruiken.
     const snap = this.store.get<PlanSnapshot | null>('planSnapshot', null);
     if (snap && this.now() - snap.at >= 0 && this.now() - snap.at < 10 * 60_000 && snap.shopMode === this.shopMode) {
@@ -645,11 +651,17 @@ export class Weekmand {
         added.push({ id: randomUUID().slice(0, 8), kind: 'ingredient', key: def.key, amount, label: `${formatAmount(amount, def.unit)} ${def.name.toLowerCase()}` });
         continue;
       }
-      let product = item.productId ? this.#searchCache.get(item.productId) : undefined;
+      let product = item.productId ? await this.#findProduct(item.productId, item.name) : undefined;
+      if (item.productId) check(product, `Ik vind product ${item.productId} niet meer; zoek het opnieuw op.`);
       if (!product) {
-        const results = (await this.#requireShop().search(item.name)).filter(p => p.available);
-        for (const r of results) this.#searchCache.set(r.id, r);
-        product = results[0];
+        // "Kippenpoten 650 g" vindt niets; "kippenpoten" wel.
+        for (const query of [item.name, baseName(item.name)]) {
+          if (!query) continue;
+          const results = (await this.#requireShop().search(query)).filter(p => p.available);
+          for (const r of results) this.#searchCache.set(r.id, r);
+          product = results[0];
+          if (product) break;
+        }
       }
       check(product, `Ik vind "${item.name}" niet in de ${this.shop.label.toLowerCase()}.`);
       added.push({ id: randomUUID().slice(0, 8), kind: 'product', productId: product.id, name: product.name, unitQuantity: product.unitQuantity, cents: product.cents, quantity, ...(def ? { key: def.key } : {}) });
@@ -774,13 +786,38 @@ export class Weekmand {
 
   links() { return this.store.links(); }
 
-  linkProduct(name: string, productId: string) {
+  /** Een product dat eerder gezocht is; anders opnieuw zoeken op de naam (de zoekcache verdwijnt bij een herstart). */
+  async #findProduct(productId: string, hint?: string) {
+    const cached = this.#searchCache.get(productId);
+    if (cached || !hint) return cached;
+    for (const query of [hint, baseName(hint)]) {
+      if (!query) continue;
+      for (const r of await this.#requireShop().search(query)) this.#searchCache.set(r.id, r);
+      if (this.#searchCache.has(productId)) return this.#searchCache.get(productId);
+    }
+    return undefined;
+  }
+
+  /**
+   * Koppel een ingrediënt aan een gekozen product (uit search_products), ook vanuit de chat.
+   * perPack: hoeveel van het ingrediënt één verpakking dekt, als de verpakking zich niet laat omrekenen
+   * (een ingrediënt in stuks, een product in gram).
+   */
+  async linkProductFor(name: string, productId: string, options: { productName?: string; perPack?: number } = {}) {
+    const def = this.catalog.resolve(name);
+    check(def, `Ik ken "${name}" niet als ingrediënt.`);
+    const product = await this.#findProduct(productId, options.productName ?? def.query ?? def.name);
+    check(product, 'Zoek het product eerst op met search_products en gebruik het product_id daaruit.');
+    return this.linkProduct(def.name, product.id, options.perPack);
+  }
+
+  linkProduct(name: string, productId: string, perPack?: number) {
     const def = this.catalog.resolve(name);
     check(def, `Ik ken "${name}" niet als ingrediënt.`);
     const product = this.#searchCache.get(productId);
     check(product, 'Zoek het product eerst op.');
-    const amount = packAmount(product.unitQuantity, def);
-    check(amount, `Ik kan de verpakking "${product.unitQuantity}" niet omrekenen naar ${def.unit}. Kies een ander product.`);
+    const amount = packAmount(product.unitQuantity, def) ?? (Number(perPack) > 0 && Number(perPack) < 100000 ? Number(perPack) : null);
+    check(amount, `Ik kan de verpakking "${product.unitQuantity}" niet omrekenen naar ${def.unit}. Geef per_pack mee (hoeveel ${def.unit === 'st' ? 'stuks' : def.unit} één verpakking dekt) of kies een ander product.`);
     const link: ProductLink = { key: def.key, productId: product.id, name: product.name, unitQuantity: product.unitQuantity, packAmount: amount, cents: product.cents, auto: false, updatedAt: new Date(this.now()).toISOString() };
     this.store.saveLink(link);
     this.#saveVariants(def, link, [...this.#searchCache.values()]);
@@ -1300,7 +1337,7 @@ export class Weekmand {
       if (a.kind === 'ignore') aliases[receiptKey(line.name)] = { key: null, by: 'ai' };
       else if (a.kind === 'existing' && a.key && this.catalog.ingredient(a.key)) aliases[receiptKey(line.name)] = { key: a.key, amount, by: 'ai' };
       else if (a.kind === 'new' && typeof a.name === 'string' && /^[\p{L}\d' -]{2,40}$/u.test(a.name.trim()) && ['g', 'ml', 'st'].includes(String(a.unit))) {
-        const def = this.catalog.ensureIngredient(a.name.trim(), a.unit as BaseUnit, categories.includes(a.category as Category) ? a.category as Category : 'groente-fruit');
+        const def = this.catalog.ensureIngredient(a.name.trim(), a.unit as BaseUnit, categories.includes(a.category as Category) ? a.category as Category : undefined);
         aliases[receiptKey(line.name)] = { key: def.key, amount, by: 'ai' };
       } else continue;
       matched.push(line.name);

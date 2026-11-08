@@ -1,7 +1,7 @@
 import type PicnicClient from 'picnic-api';
 import type { Weekmand } from './app.ts';
 import { normalize, slug } from './catalog.ts';
-import type { BaseUnit, Category } from './types.ts';
+import type { BaseUnit } from './types.ts';
 import { convert, packAmount, parseUnitQuantity, toBase } from './units.ts';
 
 type Client = InstanceType<typeof PicnicClient>;
@@ -33,7 +33,7 @@ export function convertRecipe(app: Weekmand, detail: Detail, summary: Summary | 
     const pack = ing.unitQuantity ? parseUnitQuantity(ing.unitQuantity) : {};
     const needed = neededAmount(ing.neededText);
     const unit: BaseUnit = needed?.unit ?? (pack.g !== undefined ? 'g' : pack.ml !== undefined ? 'ml' : 'st');
-    const def = app.catalog.resolve(ing.name) ?? app.catalog.ensureIngredient(ing.name, unit, 'groente-fruit' as Category);
+    const def = app.catalog.resolve(ing.name) ?? app.catalog.ensureIngredient(ing.name, unit);
     let amount: number | null = needed ? convert(needed.amount, needed.unit, def) : null;
     if (amount === null && ing.unitQuantity) {
       const per = packAmount(ing.unitQuantity, def);

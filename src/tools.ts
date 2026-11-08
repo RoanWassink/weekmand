@@ -107,7 +107,7 @@ export const tools: Tool[] = [
       day, recipe_id: str('Bestaand recept-ID.'), servings: num('Aantal porties.'), note: str('Opmerking, bijv. "visite".'),
       recipe: obj({
         name: str('Naam van het gerecht.'), tags: { type: 'array', items: { type: 'string' } }, minutes: { type: 'integer' }, steps: str('Korte bereiding.'),
-        ingredients: { type: 'array', minItems: 1, items: obj({ name: str('Ingrediënt.'), amount: num('Per portie.'), unit: str('g, kg, ml, l, el, tl of st.') }, ['name', 'amount', 'unit']) },
+        ingredients: { type: 'array', minItems: 1, items: obj({ name: str('Ingrediënt; gebruik bij voorkeur een gewone naam (kippenpoten, tijm), geen omschrijving.'), amount: num('Per portie.'), unit: str('g, kg, ml, l, el, tl of st.'), category: { type: 'string', enum: ['groente-fruit', 'aardappel', 'vlees', 'vis', 'vega', 'zuivel-eieren', 'kaas', 'brood', 'pasta-rijst', 'conserven', 'kruiden-sauzen', 'olie-azijn', 'bakken', 'diepvries', 'drinken', 'ontbijt', 'snacks', 'huishouden'] } }, ['name', 'amount', 'unit']) },
       }, ['name', 'ingredients']),
     }, ['day']),
     run: async (app, a) => {
@@ -176,13 +176,24 @@ export const tools: Tool[] = [
     name: 'add_to_cart', title: 'Boodschappen berekenen en toevoegen',
     description: 'Zet optioneel extra producten op de lijst (bijv. "krat pils", of "500 g gehakt") en bereken het verschil tussen wat nodig is (menu, vaste boodschappen, extra\'s, min voorraad) en de huidige Picnic-mand. Past NIETS toe: laat de gebruiker de wijzigingen zien en roep pas na akkoord confirm_cart_update aan met het review_id.',
     input: obj({
-      items: { type: 'array', maxItems: 25, items: obj({ name: str('Product, bijv. "krat pils".'), quantity: { type: 'integer', minimum: 1, maximum: 50 }, amount: num('Hoeveelheid voor een ingrediënt.'), unit: str('Eenheid bij amount.') }, ['name']) },
+      items: { type: 'array', maxItems: 25, items: obj({ name: str('Product, bijv. "krat pils".'), product_id: str('Het id uit search_products als de gebruiker precies dat product wil.'), quantity: { type: 'integer', minimum: 1, maximum: 50 }, amount: num('Hoeveelheid voor een ingrediënt.'), unit: str('Eenheid bij amount.') }, ['name']) },
     }),
     run: async (app, a, ctx) => {
-      const added = a.items?.length ? await app.addItems(a.items) : [];
+      const added = a.items?.length ? await app.addItems(a.items.map((i: any) => ({ ...i, productId: i.product_id }))) : [];
       const plan = await app.plan();
       if (plan.lines.some(l => l.add || l.remove)) ctx.pendingReview?.(plan.id);
       return { added, ...planSummary(plan) };
+    },
+  },
+  {
+    name: 'link_product', title: 'Ingrediënt aan een product koppelen',
+    description: 'Koppel een ingrediënt uit het menu aan een product van de winkel. Gebruik dit als missing_products een ingrediënt zonder product noemt, of als de gebruiker voor een ingrediënt een ander product wil ("neem kippenpoten voor de kip"). product_id komt uit search_products. Is het ingrediënt in stuks en het product in gram (of andersom), geef dan per_pack: hoeveel van het ingrediënt één verpakking dekt (bijv. 650 g kippenpoten = 3 stuks). Berekent daarna de mand opnieuw; toepassen gaat via de knop.',
+    input: obj({ ingredient: str('Het ingrediënt, zoals in missing_products of het recept.'), product_id: str('Het id uit search_products.'), product_name: str('De productnaam uit search_products.'), per_pack: num('Hoeveel van het ingrediënt (in zijn eigen eenheid) één verpakking dekt.') }, ['ingredient', 'product_id']),
+    run: async (app, a, ctx) => {
+      const link = await app.linkProductFor(a.ingredient, a.product_id, { productName: a.product_name, perPack: a.per_pack });
+      const plan = await app.plan();
+      if (plan.lines.some(l => l.add || l.remove)) ctx.pendingReview?.(plan.id);
+      return { linked: `${link.name} (${link.unitQuantity}) voor ${a.ingredient}`, ...planSummary(plan) };
     },
   },
   {

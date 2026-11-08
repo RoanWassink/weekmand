@@ -19,10 +19,15 @@ Werkwijze:
 - "Vrijdag eten we met 6 man Mexicaans": zoek met find_recipes (tag mexicaans) en zet het gerecht met set_meal op vrijdag met servings 6. Bestaat er geen passend recept, geef dan zelf een recept mee aan set_meal (ingrediënten per persoon).
 - Na een wijziging aan het menu of als de gebruiker iets wil toevoegen of weghalen: roep add_to_cart (of remove_from_cart) aan. Dat berekent alleen het verschil met de mand.
 - De gebruiker keurt mandwijzigingen goed met de knop "Naar Picnic sturen" onder jouw antwoord (alleen de verschillen gaan naar Picnic; wat de gebruiker zelf in Picnic zette blijft staan). Noem kort de belangrijkste wijzigingen en het nieuwe totaal, en zeg dat ze op de knop kunnen drukken.
-- Je kunt niet bestellen of betalen; dat doet de gebruiker in de Picnic-app.
+- Zeg alleen dat iets is toegevoegd of weggehaald als add_to_cart, remove_from_cart of link_product dat in deze beurt teruggaf. Noem dan de wijzigingen en het totaal uit die uitkomst (changes, cart_total_after), nooit uit je geheugen of een eerder bericht.
+- missing_products betekent: voor dat ingrediënt is nog geen product, dus het komt niet in de mand. Zoek met search_products en koppel met link_product. Kiest de gebruiker een product uit een lijst die jij liet zien, gebruik dan precies het product_id uit search_products, ook bij add_to_cart. Zeg nooit dat een product niet bestaat als search_products het vond.
+- Haal niets van de lijst of uit de mand dat iemand anders in het huishouden heeft toegevoegd (de lijst wordt gedeeld, ook via Telegram), tenzij de gebruiker daar zelf om vraagt.
+- Je kunt niet bestellen of betalen; dat doet de gebruiker in de Picnic-app. Zelf iets naar Picnic sturen kun je ook niet; daarvoor is de knop.
 - Vraag kort door als iets echt onduidelijk is (welke dag, hoeveel personen).`;
 
 export type ChatResult = { reply: string; reviewId?: string; ai: boolean };
+/** Getypte goedkeuring ("naar picnic sturen", "stuur maar", "verstuur"), na normalize(). */
+const sendPhrase = /^(ja |ok |oke |prima )?(naar picnic( sturen| versturen)?|(stuur|verstuur)( het| alles| de mand| de wijzigingen)?( maar)?( door| naar picnic)?|doorvoeren|mand (versturen|doorvoeren))$/;
 
 export class Assistant {
   #app: Weekmand;
@@ -252,7 +257,10 @@ Twijfel je tussen nodig en extra, kies dan nodig. Roep deel_in precies één kee
     let reviewId: string | undefined;
     const ctx: ToolContext = { channel: kind, pendingReview: id => { reviewId = id; } };
     let reply: string;
-    if (!active) {
+    if (sendPhrase.test(normalize(text))) {
+      // "Naar Picnic sturen" getypt: niet aan een taalmodel geven, maar tonen wat er echt klaarstaat, met de knop.
+      reply = await this.#readyToSend(ctx);
+    } else if (!active) {
       reply = await this.#commands(text, ctx);
     } else {
       const app = this.#app;
@@ -270,10 +278,29 @@ Twijfel je tussen nodig en extra, kies dan nodig. Roep deel_in precies één kee
           }
         },
       });
+      // Belooft het antwoord de knop zonder dat er in deze beurt iets berekend is: de echte stand erbij, met de knop.
+      if (!reviewId && /naar picnic sturen/i.test(reply)) {
+        const ready = await this.#readyToSend(ctx).catch(() => null);
+        if (ready && reviewId) reply += '\n\n' + ready;
+      }
     }
     this.#app.store.addChat(channel, 'user', text);
     this.#app.store.addChat(channel, 'assistant', reply);
     return { reply, ai: !!active, ...(reviewId ? { reviewId } : {}) };
+  }
+
+  /** Wat er nu echt naar Picnic zou gaan (berekend door Weekmand, niet door een taalmodel). */
+  async #readyToSend(ctx: ToolContext) {
+    const app = this.#app;
+    if (!app.shop.ready()) return 'Weekmand is niet aangemeld bij Picnic; meld je aan onder Meer.';
+    const plan = await app.currentPlan();
+    const changes = plan.lines.filter(l => l.add || l.remove);
+    const missing = plan.missing.map(m => m.name);
+    const note = missing.length ? `\nLet op: voor ${missing.join(', ')} is nog geen product gekoppeld, dus dat komt niet mee. Noem een product of koppel er een in de app (Mand).` : '';
+    if (!changes.length) return 'Er staat niets klaar om te sturen: je Picnic-mand is al compleet.' + note;
+    ctx.pendingReview?.(plan.id);
+    return 'Dit gaat naar Picnic:\n' + changes.map(l => `${l.add ? '+' + l.add : '−' + l.remove} ${l.product}`).join('\n')
+      + `\nTotaal daarna: ${euro(plan.totalCents)}.` + note + '\nDruk op "Naar Picnic sturen" om het door te voeren.';
   }
 
   async #context() {

@@ -24,6 +24,32 @@ function singular(word: string): string[] {
   return forms;
 }
 
+/**
+ * Categorie voor een nieuw ingrediënt dat de AI, een import of de gebruiker noemt. Zonder deze
+ * schatting werd alles "groente-fruit", en een kiprecept daardoor "vegetarisch".
+ */
+const categoryList: Category[] = ['groente-fruit', 'aardappel', 'vlees', 'vis', 'vega', 'zuivel-eieren', 'kaas', 'brood', 'pasta-rijst', 'conserven', 'kruiden-sauzen', 'olie-azijn', 'bakken', 'diepvries', 'drinken', 'ontbijt', 'snacks', 'huishouden'];
+const categoryRules: [RegExp, Category][] = [
+  [/kruiden|bouillon|saus|poeder|specerij/, 'kruiden-sauzen'],
+  [/\b(tijm\w*|rozemarijn|oregano|basilicum|peterselie|koriander|dille|bieslook|kaneel|nootmuskaat|komijn|kurkuma|kerrie|curry\w*|peper|zout|ketchup|mayonaise|mosterd|sambal|ketjap|pesto|laurier\w*)\b/, 'kruiden-sauzen'],
+  [/\b(vis|zalm\w*|tonijn|kabeljauw|pangasius|tilapia|makreel|haring|garnalen|garnaal|mosselen|scampi|forel|koolvis|schelvis|sardines?|ansjovis|kibbeling)\b/, 'vis'],
+  [/\b(kip\w*|kippen\w*|kalkoen\w*|eend\w*|rund\w*|varken\w*|gehakt\w*|biefstuk|spek\w*|ham|worst\w*|chorizo|salami|lams?\w*vlees|shoarma|schnitzel\w*|hamburger\w*|bacon|pancetta|ossenhaas|entrecote|drumsticks?|vlees)\b/, 'vlees'],
+  [/\b(kaas|feta|mozzarella|parmezaan|parmigiano|geitenkaas|brie|camembert|halloumi|ricotta|mascarpone|cheddar|gouda)\b/, 'kaas'],
+  [/\b(melk|yoghurt|kwark|room|kookroom|slagroom|boter|creme fraiche|eieren|ei|vla)\b/, 'zuivel-eieren'],
+  [/\b(brood\w*|pita\w*|wraps?|tortilla\w*|bolletjes|croissants?|naan|bagels?|beschuit|crackers?)\b/, 'brood'],
+  [/\b(pasta|spaghetti|penne|macaroni|fusilli|tagliatelle|lasagne\w*|rijst|noedels|mie|couscous|bulgur|quinoa|gnocchi)\b/, 'pasta-rijst'],
+  [/\b(aardappel\w*|krieltjes|friet|patat)\b/, 'aardappel'],
+  [/\b(olie|olijfolie|zonnebloemolie|azijn|balsamico)\b/, 'olie-azijn'],
+  [/\b(bloem|meel|suiker|bakpoeder|gist|vanille\w*|cacao|maizena)\b/, 'bakken'],
+  [/\b(water|sap|cola|bier|wijn|koffie|thee|limonade|frisdrank)\b/, 'drinken'],
+  [/\b(chips|chocolade|koek\w*|snoep|noten|nootjes)\b/, 'snacks'],
+];
+export function guessCategory(name: string): Category {
+  const text = normalize(name);
+  for (const [re, category] of categoryRules) if (re.test(text)) return category;
+  return 'groente-fruit';
+}
+
 export class Catalog {
   #store: Store;
   #ingredients: Map<string, IngredientDef> | null = null;
@@ -86,13 +112,13 @@ export class Catalog {
   }
 
   /** Voeg een ingrediënt toe dat de AI of gebruiker noemt maar dat nog niet bestaat. */
-  ensureIngredient(name: string, unit: BaseUnit, category: Category = 'groente-fruit'): IngredientDef {
+  ensureIngredient(name: string, unit: BaseUnit, category?: Category): IngredientDef {
     const existing = this.resolve(name);
     if (existing) return existing;
     const key = slug(name);
     check(/^[a-z0-9-]{2,60}$/.test(key), 'Ongeldige ingrediëntnaam: ' + name);
     const def: IngredientDef = {
-      key, name: name.trim().replace(/^./, c => c.toUpperCase()), unit, category, query: name.trim(),
+      key, name: name.trim().replace(/^./, c => c.toUpperCase()), unit, category: category ?? guessCategory(name), query: name.trim(),
       packs: [{ id: key + '-demo', name: name.trim() + ' (demo)', amount: unit === 'st' ? 1 : unit === 'g' ? 250 : 500, unit, cents: 299 }],
     };
     this.#store.saveIngredient(def);
@@ -104,7 +130,7 @@ export class Catalog {
    * Bewaar een recept uit vrije invoer. Ingrediëntnamen worden gekoppeld aan de catalogus;
    * onbekende ingrediënten worden aangemaakt. Hoeveelheden gelden per volwassen portie.
    */
-  addRecipe(input: { id?: string; name: string; tags?: string[]; minutes?: number; steps?: string; ingredients: { name: string; amount: number; unit: string }[] }, source: Recipe['source']): Recipe {
+  addRecipe(input: { id?: string; name: string; tags?: string[]; minutes?: number; steps?: string; ingredients: { name: string; amount: number; unit: string; category?: string }[] }, source: Recipe['source']): Recipe {
     check(typeof input.name === 'string' && input.name.trim().length >= 2 && input.name.length <= 80, 'Geef het recept een naam.');
     check(Array.isArray(input.ingredients) && input.ingredients.length >= 1 && input.ingredients.length <= 30, 'Een recept heeft 1 tot 30 ingrediënten.');
     const ingredients = input.ingredients.map(item => {
@@ -112,7 +138,7 @@ export class Catalog {
       check(typeof item.amount === 'number' && item.amount > 0 && item.amount < 100000, 'Ongeldige hoeveelheid voor ' + item.name + '.');
       const base = toBase(item.amount, String(item.unit || 'st'));
       check(base, 'Onbekende eenheid "' + item.unit + '" bij ' + item.name + '. Gebruik g, kg, ml, l, el, tl of st.');
-      const def = this.ensureIngredient(item.name, base.unit);
+      const def = this.ensureIngredient(item.name, base.unit, categoryList.includes(item.category as Category) ? item.category as Category : undefined);
       const amount = base.unit === def.unit ? base.amount
         : def.pieceGrams && base.unit === 'st' ? base.amount * def.pieceGrams
           : def.pieceGrams && def.unit === 'st' ? base.amount / def.pieceGrams
@@ -131,6 +157,28 @@ export class Catalog {
     this.#store.saveRecipe(recipe);
     this.#refresh();
     return recipe;
+  }
+
+  /**
+   * Eenmalig: eigen ingrediënten die vroeger standaard "groente-fruit" kregen, krijgen de geschatte
+   * categorie; eigen recepten met vlees of vis verliezen het label "vegetarisch".
+   */
+  fixGuessedCategories() {
+    let ingredients = 0, recipes = 0;
+    for (const def of this.#store.customIngredients()) {
+      const guess = guessCategory(def.name);
+      if (def.category !== 'groente-fruit' || guess === 'groente-fruit') continue;
+      this.#store.saveIngredient({ ...def, category: guess });
+      ingredients++;
+    }
+    this.#refresh();
+    for (const recipe of this.#store.customRecipes()) {
+      if (!recipe.tags.includes('vegetarisch') || !recipe.ingredients.some(i => ['vlees', 'vis'].includes(this.ingredient(i.key)?.category ?? ''))) continue;
+      this.#store.saveRecipe({ ...recipe, tags: recipe.tags.filter(t => t !== 'vegetarisch') });
+      recipes++;
+    }
+    this.#refresh();
+    return { ingredients, recipes };
   }
 
   deleteRecipe(id: string) {
