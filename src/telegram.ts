@@ -244,8 +244,13 @@ export class TelegramBot {
     }
     this.#rememberName(chat, message.from);
     const t = normalize(text);
+    if (t === 'nieuw' || t === 'nieuw gesprek' || t === 'opnieuw beginnen') {
+      this.#app.store.clearChat('tg:' + chat);
+      await this.send(chat, 'Nieuw gesprek: ik begin zonder de eerdere berichten. Menu, voorraad, lijst en mand blijven zoals ze zijn.');
+      return;
+    }
     if (t === 'start' || t === 'help') {
-      await this.send(chat, 'Stuur gewoon een bericht, bijvoorbeeld: "Wat staat er deze week op het menu?", "We eten vrijdag met 6 man Mexicaans", "Voeg een krat pils toe en haal de kipfilet eruit" of "melk is op". Snelkoppelingen: /menu /mand /voorraad');
+      await this.send(chat, 'Stuur gewoon een bericht, bijvoorbeeld: "Wat staat er deze week op het menu?", "We eten vrijdag met 6 man Mexicaans", "Voeg een krat pils toe en haal de kipfilet eruit" of "melk is op". Snelkoppelingen: /menu /mand /voorraad, en /nieuw om opnieuw te beginnen als ik in de war ben.');
       return;
     }
     const before = this.#app.revision;

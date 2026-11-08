@@ -21,6 +21,8 @@ Werkwijze:
 - De gebruiker keurt mandwijzigingen goed met de knop "Naar Picnic sturen" onder jouw antwoord (alleen de verschillen gaan naar Picnic; wat de gebruiker zelf in Picnic zette blijft staan). Noem kort de belangrijkste wijzigingen en het nieuwe totaal, en zeg dat ze op de knop kunnen drukken.
 - Zeg alleen dat iets is toegevoegd of weggehaald als add_to_cart, remove_from_cart of link_product dat in deze beurt teruggaf. Noem dan de wijzigingen en het totaal uit die uitkomst (changes, cart_total_after), nooit uit je geheugen of een eerder bericht.
 - missing_products betekent: voor dat ingrediënt is nog geen product, dus het komt niet in de mand. Zoek met search_products en koppel met link_product. Kiest de gebruiker een product uit een lijst die jij liet zien, gebruik dan precies het product_id uit search_products, ook bij add_to_cart. Zeg nooit dat een product niet bestaat als search_products het vond.
+- Wat jij eerder in dit gesprek zei over producten of de mand kan fout of verouderd zijn. Controleer het met de tools voordat je het herhaalt. Zeg nooit dat een product niet bestaat zonder in deze beurt search_products te hebben gebruikt, met een korte zoekterm zonder maat ("kippenpoten", niet "kippenpoten 650 gram").
+- Vraagt de gebruiker om een product "voor" een recept of ingrediënt (bijv. "voeg kippenpoten toe voor het kiprecept"), en staat dat ingrediënt bij de ingrediënten zonder product: zoek het product en koppel het met link_product aan dat ingrediënt, niet met add_to_cart.
 - Haal niets van de lijst of uit de mand dat iemand anders in het huishouden heeft toegevoegd (de lijst wordt gedeeld, ook via Telegram), tenzij de gebruiker daar zelf om vraagt.
 - Je kunt niet bestellen of betalen; dat doet de gebruiker in de Picnic-app. Zelf iets naar Picnic sturen kun je ook niet; daarvoor is de knop.
 - Vraag kort door als iets echt onduidelijk is (welke dag, hoeveel personen).`;
@@ -271,8 +273,10 @@ Twijfel je tussen nodig en extra, kies dan nodig. Roep deel_in precies één kee
         run: async call => {
           try {
             const result = await runTool(app, call.name, call.input, ctx);
+            console.log(`Chat-tool ${call.name}: ok`);
             return { content: JSON.stringify(result), isError: false };
           } catch (error) {
+            console.log(`Chat-tool ${call.name}: ${error instanceof Problem ? error.message : 'fout'}`);
             if (!(error instanceof Problem)) console.error('Tool', call.name, error);
             return { content: error instanceof Problem ? error.message : 'De bewerking is mislukt.', isError: true };
           }
@@ -313,7 +317,15 @@ Twijfel je tussen nodig en extra, kies dan nodig. Roep deel_in precies één kee
       `Huishouden: ${h.adults} volwassenen, ${h.children} kinderen, ${h.toddlers} dreumesen (${portions(h)} porties per maaltijd), budget ${euro(h.budget * 100)} per bestelling${h.vegetarian ? ', vegetarisch' : ''}.`,
       `Winkel: ${app.shop.label}${app.shop.ready() ? '' : ' (niet aangemeld)'}.`,
       next ? `Volgende bezorging: ${longDate(next.windowStart)} ${clock(next.windowStart)}; wijzigen kan tot ${longDate(next.cutOff)} ${clock(next.cutOff)}.` : 'Geen bezorgmoment bekend.',
+      ...this.#missingNote(),
     ].join('\n');
+  }
+
+  /** Feiten uit de laatste mandberekening, zodat het taalmodel niet op zijn eigen eerdere berichten leunt. */
+  #missingNote() {
+    const review = this.#app.store.get<{ plan?: { missing?: { name: string }[] } } | null>('review', null);
+    const missing = review?.plan?.missing?.map(m => m.name) ?? [];
+    return missing.length ? [`Ingrediënten van het menu zonder product (die komen nu NIET in de mand): ${missing.join(', ')}. Zoek een product met search_products (korte zoekterm zonder maat) en koppel het met link_product.`] : [];
   }
 
   /** Vaste Nederlandse commando's voor als er geen taalmodel is gekoppeld. */

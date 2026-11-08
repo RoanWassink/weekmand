@@ -779,7 +779,10 @@ export class Weekmand {
 
   async searchProducts(query: string) {
     check(typeof query === 'string' && query.trim() && query.length <= 80, 'Geef een zoekterm van maximaal 80 tekens.');
-    const results = await this.#requireShop().search(query.trim());
+    let results = await this.#requireShop().search(query.trim());
+    // "kippenpoten 650 gram" vindt bij Picnic niets; "kippenpoten" wel.
+    const bare = baseName(query);
+    if (!results.length && bare && bare !== normalize(query)) results = await this.#requireShop().search(bare);
     for (const r of results) this.#searchCache.set(r.id, r);
     return results;
   }

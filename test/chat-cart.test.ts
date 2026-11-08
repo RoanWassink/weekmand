@@ -108,3 +108,35 @@ test('chat: "naar picnic sturen" getypt toont wat echt klaarstaat, met de knop',
   await assistant.chat('t', 'stuur maar');
   assert.equal(calls, 1);
 });
+
+test('chat: de AI ziet welke ingrediënten geen product hebben, zoekt zonder maat en koppelt', async t => {
+  const { app } = picnicApp();
+  const ctx = { channel: 'chat' as const };
+  await runTool(app, 'set_meal', { day: '2026-11-15', servings: 2, recipe: { name: 'Luxe kippenbouten', ingredients: [{ name: 'Kippenbout groot', amount: 1, unit: 'st' }] } }, ctx);
+  await runTool(app, 'add_to_cart', {}, ctx);
+  // Zoeken met een maat geeft bij Picnic niets; Weekmand probeert het zonder.
+  assert.deepEqual((await app.searchProducts('kippenpoten 650 gram')).map(p => p.id), ['kp650']);
+
+  process.env.AI_PROVIDER = 'mistral';
+  process.env.AI_API_KEY = 'test-key-123';
+  t.after(() => { delete process.env.AI_PROVIDER; delete process.env.AI_API_KEY; });
+  let step = 0;
+  let context = '';
+  t.mock.method(globalThis, 'fetch', async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    step++;
+    if (step === 1) {
+      context = body.messages[0].content;
+      return Response.json({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [
+        { id: 'a', type: 'function', function: { name: 'search_products', arguments: '{"query":"kippenpoten 650 gram"}' } },
+        { id: 'b', type: 'function', function: { name: 'link_product', arguments: '{"ingredient":"Kippenbout groot","product_id":"kp650","per_pack":3}' } },
+      ] } }] });
+    }
+    return Response.json({ choices: [{ message: { role: 'assistant', content: 'Kippenpoten 650 g staan erbij. Druk op Naar Picnic sturen.' } }] });
+  });
+  const assistant = new Assistant(app);
+  const r = await assistant.chat('t', 'voeg nog even de kippenpoten toe voor het kiprecept op zondag');
+  assert.match(context, /zonder product \(die komen nu NIET in de mand\): Kippenbout groot/);
+  assert.ok(r.reviewId, 'knop eronder');
+  assert.ok((await app.currentPlan()).lines.some(l => l.productId === 'kp650' && l.add === 1));
+});
