@@ -6,6 +6,7 @@ Weekmand is een lokale boodschappenassistent voor een huishouden dat bij Picnic 
   <img src="docs/screenshots/week.png" alt="Weekmenu" width="240">
   <img src="docs/screenshots/mand.png" alt="Mand met voorgestelde wijzigingen" width="240">
   <img src="docs/screenshots/voorraad.png" alt="Voorraad" width="240">
+  <img src="docs/screenshots/budget.png" alt="Budget" width="240">
 </p>
 
 Meer details: [docs/DETAILS.md](docs/DETAILS.md).
@@ -42,8 +43,8 @@ Naar een NanoPi R4S met OpenWrt uitrollen doe je met `deploy/Update-Weekmand.ps1
 
 Elke week:
 
-1. **Week**: maak het weekmenu, kies het bezorgmoment en keur het goed.
-2. **Mand**: bekijk de boodschappen die Weekmand heeft berekend en klik op **Naar Picnic sturen**. Wat je zelf in de Picnic-mand hebt gelegd, blijft staan.
+1. **Week**: maak het weekmenu, kies het bezorgmoment en keur het goed. Vink gerechten aan die je hebt gekookt, of vervang ze door **Ander gerecht**.
+2. **Mand**: bekijk de boodschappen (met productfoto's) die Weekmand heeft berekend en klik op **Wijzigingen naar Picnic sturen**. Wat je zelf in de Picnic-mand hebt gelegd, blijft staan.
 3. Rond de bestelling af en betaal in de Picnic-app.
 4. **Voorraad**: klik op **is op** als iets op is, of scan de barcode van het product.
 5. **Recepten**: geef gerechten een duimpje omhoog of omlaag, zodat het volgende menu beter past.
