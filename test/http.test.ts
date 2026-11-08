@@ -33,7 +33,7 @@ test('server: wachtwoord, API-token, CSRF en webapp', async t => {
   const rpc = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
   assert.equal((await fetch(base + '/mcp', { method: 'POST', headers: json, body: rpc })).status, 401);
   const listed = await fetch(base + '/mcp', { method: 'POST', headers: { ...json, Authorization: 'Bearer test-token-1234567890' }, body: rpc });
-  assert.equal((await listed.json()).result.tools.length, 27);
+  assert.equal((await listed.json()).result.tools.length, 28);
   assert.equal((await fetch(base + '/mcp', { method: 'POST', headers: { ...json, Authorization: 'Bearer fout' }, body: rpc })).status, 401);
 
   // Verzoeken vanaf een andere website worden geweigerd.

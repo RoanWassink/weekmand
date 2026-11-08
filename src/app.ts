@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { Catalog, normalize } from './catalog.ts';
+import { Catalog, normalize, slug } from './catalog.ts';
 import type { Feedback, ProductLink, Store } from './db.ts';
 import { check, Problem } from './errors.ts';
 import { detectHabits, ruleId } from './learn.ts';
@@ -45,6 +45,10 @@ export type ReceiptMatch = { receipt: string; kind: 'existing' | 'new' | 'ignore
 export type ReceiptMatcher = (lines: string[], ingredients: { key: string; name: string; unit: BaseUnit }[]) => Promise<ReceiptMatch[] | null>;
 export const receiptKey = (name: string) => name.trim().toLowerCase().replace(/\s+/g, ' ');
 /** null: er is geen AI gekoppeld. */
+/** Een recept zoals de AI het teruggeeft, klaar voor catalog.addRecipe. */
+export type AdaptedRecipe = { name: string; minutes?: number; steps?: string; tags?: string[]; ingredients: { name: string; amount: number; unit: string; category?: string }[] };
+/** Past een recept aan volgens een opmerking; null: geen AI gekoppeld. */
+export type RecipeAdapter = (recipe: { name: string; minutes: number; steps: string; tags: string[]; ingredients: { name: string; amount: number; unit: string }[] }, note: string) => Promise<AdaptedRecipe | null>;
 export type ProductClassifier = (names: string[]) => Promise<{ name: string; category: BudgetCategory; kind: SpendKind }[] | null>;
 type BudgetPrefs = { monthCents?: number; limits?: Partial<Record<BudgetCategory, number>> };
 /** De laatste mandberekening met de Picnic-mand waarmee hij gemaakt is, voor na een herstart. */
@@ -83,6 +87,8 @@ export class Weekmand {
   receiptMatcher?: ReceiptMatcher;
   /** Deelt producten in voor het budget (categorie, nodig of extra); gezet door de assistent. */
   productClassifier?: ProductClassifier;
+  /** Past een recept aan volgens een opmerking ("met kippenpoten"); gezet door de assistent. */
+  recipeAdapter?: RecipeAdapter;
   /** Leest een foto van een kassabon; gezet door de assistent. null: geen AI. */
   receiptReader?: (image: ImageInput, today: string) => Promise<ReceiptPhoto | null>;
   #spendSync: Promise<{ added: number; detailed: number; errors: string[] }> | null = null;
@@ -436,6 +442,41 @@ export class Weekmand {
     this.store.saveMeal({ date, recipeId, servings: meal.servings, status: 'proposed' });
     this.changed();
     return { date, day: dayName(date), recipe: this.#recipeView(this.catalog.recipe(recipeId)!) };
+  }
+
+  /**
+   * Aangevinkte gerechten vervangen. Met een opmerking en een AI: een aangepast recept volgens die
+   * opmerking ("met kippenpoten", "zonder paprika", "iets vegetarisch"). Anders kiest Weekmand een
+   * ander recept uit de catalogus, met de opmerking als wens.
+   */
+  async replaceMeals(input: { dates?: unknown; note?: unknown }) {
+    const dates = [...new Set(Array.isArray(input.dates) ? input.dates.map(String) : [])];
+    check(dates.length >= 1 && dates.length <= 14, 'Vink één of meer gerechten aan.');
+    const note = String(input.note ?? '').trim().slice(0, 300);
+    const results: { date: string; day: string; from: string; to: string; how: 'aangepast' | 'ander recept' }[] = [];
+    for (const date of dates) {
+      const meal = this.store.meal(date);
+      check(meal, `Op ${date} staat geen gerecht.`);
+      const old = this.catalog.recipe(meal.recipeId);
+      let adapted: AdaptedRecipe | null = null;
+      if (note && old && this.recipeAdapter) {
+        adapted = await this.recipeAdapter({
+          name: old.name, minutes: old.minutes, steps: old.steps, tags: old.tags,
+          ingredients: old.ingredients.map(i => ({ name: this.catalog.ingredient(i.key)?.name ?? i.key, amount: i.amount, unit: i.unit })),
+        }, note);
+      }
+      if (adapted) {
+        let id = slug(adapted.name) || 'recept';
+        for (let n = 2; this.catalog.recipe(id); n++) id = `${slug(adapted.name).slice(0, 56)}-${n}`;
+        const recipe = this.catalog.addRecipe({ ...adapted, id }, 'ai');
+        await this.setMeal({ date, recipeId: recipe.id, servings: meal.servings, ...(meal.note ? { note: meal.note } : {}) });
+        results.push({ date, day: dayName(date), from: old?.name ?? meal.recipeId, to: recipe.name, how: 'aangepast' });
+      } else {
+        const swapped = await this.swapMeal(date, note);
+        results.push({ date, day: dayName(date), from: old?.name ?? meal.recipeId, to: swapped.recipe.name, how: 'ander recept' });
+      }
+    }
+    return results;
   }
 
   removeMeal(date: string) {

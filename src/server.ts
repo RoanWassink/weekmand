@@ -30,6 +30,7 @@ const assistant = new Assistant(app);
 app.receiptMatcher = (lines, ingredients) => assistant.matchReceiptLines(lines, ingredients);
 app.productClassifier = names => assistant.classifyProducts(names);
 app.receiptReader = (image, today) => assistant.readReceiptPhoto(image, today);
+app.recipeAdapter = (recipe, note) => assistant.adaptRecipe(recipe, note);
 const publicUrl = process.env.PUBLIC_URL;
 wireNotices(app, publicUrl);
 
@@ -188,6 +189,7 @@ const ui: Record<string, Handler> = {
   'recipe/delete': i => { app.catalog.deleteRecipe(String(i.id)); return {}; },
   'meal/set': async i => app.setMeal({ date: String(i.date), recipeId: String(i.recipeId), servings: i.servings }),
   'meal/swap': async i => app.swapMeal(String(i.date), String(i.wish ?? '')),
+  'meal/replace': async i => ({ replaced: await app.replaceMeals({ dates: i.dates, note: i.note }) }),
   'meal/remove': i => { app.removeMeal(String(i.date)); return {}; },
   'menu/propose': async i => app.proposeMenu({ wish: String(i.wish ?? ''), replace: !!i.replace }),
   'menu/approve': async () => ({ approved: await app.approveMenu() }),

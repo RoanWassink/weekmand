@@ -123,6 +123,12 @@ export const tools: Tool[] = [
     run: async (app, a) => app.swapMeal(date(app, a.day), a.preferences ?? ''),
   },
   {
+    name: 'adapt_meal', title: 'Gerecht aanpassen of vervangen',
+    description: 'Vervang het gerecht op een dag volgens een opmerking: een aanpassing ("met kippenpoten in plaats van kippenbouten", "zonder paprika", "voor 6 personen pittiger") of een wens ("iets vegetarisch"). Weekmand maakt een aangepast recept en zet het op die dag; het oude recept blijft in de receptenlijst. Gebruik dit in plaats van zelf een recept te bedenken als de gebruiker een bestaand gerecht wil veranderen. Daarna add_to_cart om de mand opnieuw te berekenen.',
+    input: obj({ day, note: str('Wat er anders moet.') }, ['day', 'note']),
+    run: async (app, a) => ({ replaced: await app.replaceMeals({ dates: [date(app, a.day)], note: a.note }) }),
+  },
+  {
     name: 'remove_meal', title: 'Maaltijd schrappen', description: 'Haal de maaltijd van een dag van het menu (bijv. uit eten).',
     input: obj({ day }, ['day']),
     run: async (app, a) => { const d = date(app, a.day); app.removeMeal(d); return { removed: d }; },

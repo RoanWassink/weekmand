@@ -1,6 +1,6 @@
 import { converse, labelOf, modelOf, providers, testConnection, visionModels } from './ai.ts';
 import type { AIConfig, ImageInput, Provider } from './ai.ts';
-import type { ReceiptMatch, Weekmand } from './app.ts';
+import type { AdaptedRecipe, ReceiptMatch, RecipeAdapter, Weekmand } from './app.ts';
 import { budgetCategories, categoryKeys, kindKeys } from './budget.ts';
 import type { BudgetCategory, ReceiptPhoto, SpendKind } from './budget.ts';
 import { normalize } from './catalog.ts';
@@ -22,6 +22,7 @@ Werkwijze:
 - Zeg alleen dat iets is toegevoegd of weggehaald als add_to_cart, remove_from_cart of link_product dat in deze beurt teruggaf. Noem dan de wijzigingen en het totaal uit die uitkomst (changes, cart_total_after), nooit uit je geheugen of een eerder bericht.
 - missing_products betekent: voor dat ingrediënt is nog geen product, dus het komt niet in de mand. Zoek met search_products en koppel met link_product. Kiest de gebruiker een product uit een lijst die jij liet zien, gebruik dan precies het product_id uit search_products, ook bij add_to_cart. Zeg nooit dat een product niet bestaat als search_products het vond.
 - Wat jij eerder in dit gesprek zei over producten of de mand kan fout of verouderd zijn. Controleer het met de tools voordat je het herhaalt. Zeg nooit dat een product niet bestaat zonder in deze beurt search_products te hebben gebruikt, met een korte zoekterm zonder maat ("kippenpoten", niet "kippenpoten 650 gram").
+- Wil de gebruiker een gerecht op het menu veranderen ("vervang het recept door één met kippenpoten", "zonder paprika"), gebruik dan adapt_meal met die opmerking en daarna add_to_cart. Bedenk het recept niet zelf met set_meal.
 - Vraagt de gebruiker om een product "voor" een recept of ingrediënt (bijv. "voeg kippenpoten toe voor het kiprecept"), en staat dat ingrediënt bij de ingrediënten zonder product: zoek het product en koppel het met link_product aan dat ingrediënt, niet met add_to_cart.
 - Haal niets van de lijst of uit de mand dat iemand anders in het huishouden heeft toegevoegd (de lijst wordt gedeeld, ook via Telegram), tenzij de gebruiker daar zelf om vraagt.
 - Je kunt niet bestellen of betalen; dat doet de gebruiker in de Picnic-app. Zelf iets naar Picnic sturen kun je ook niet; daarvoor is de knop.
@@ -249,6 +250,54 @@ Twijfel je tussen nodig en extra, kies dan nodig. Roep deel_in precies één kee
       await converse(config, input(fallback));
     }
     return found;
+  }
+
+  /**
+   * Een recept aanpassen volgens een opmerking van het huishouden. Behoudt wat de opmerking niet
+   * noemt. null: er is geen AI gekoppeld.
+   */
+  async adaptRecipe(recipe: Parameters<RecipeAdapter>[0], note: string): Promise<AdaptedRecipe | null> {
+    const active = this.config();
+    if (!active) return null;
+    let result = null as AdaptedRecipe | null;
+    await converse(active.config, {
+      system: `Je past een recept aan voor een Nederlands huishouden. Volg de opmerking van de gebruiker. Gaat de opmerking over een onderdeel ("met kippenpoten in plaats van kippenbouten", "zonder paprika", "pittiger"), houd dan de rest van het recept gelijk en pas naam, ingrediënten en bereiding daarop aan. Is de opmerking een wens voor iets anders ("iets vegetarisch", "iets snels"), maak dan een passend nieuw gerecht. Hoeveelheden per portie (1 persoon). Gebruik gewone ingrediëntnamen zoals in de supermarkt (kippenpoten, tijm, aardappelen), zonder bijvoeglijke naamwoorden als "groot" of "vers". Eenheden: g, ml, st, el of tl. Geef bij elk ingrediënt een categorie. Roep nieuw_recept precies één keer aan.`,
+      context: 'Huidig recept: ' + JSON.stringify(recipe),
+      history: [],
+      message: 'Opmerking: ' + note,
+      tools: [{
+        name: 'nieuw_recept', description: 'Sla het aangepaste recept op.',
+        input: {
+          type: 'object', required: ['naam', 'ingredienten'], additionalProperties: false,
+          properties: {
+            naam: { type: 'string' }, minuten: { type: 'integer' }, bereiding: { type: 'string', description: 'Korte bereiding in stappen.' },
+            tags: { type: 'array', items: { type: 'string' } },
+            ingredienten: {
+              type: 'array', minItems: 1, maxItems: 30,
+              items: {
+                type: 'object', required: ['naam', 'hoeveelheid', 'eenheid'], additionalProperties: false,
+                properties: {
+                  naam: { type: 'string' }, hoeveelheid: { type: 'number', description: 'Per portie.' }, eenheid: { type: 'string', enum: ['g', 'ml', 'st', 'el', 'tl'] },
+                  categorie: { type: 'string', enum: ['groente-fruit', 'aardappel', 'vlees', 'vis', 'vega', 'zuivel-eieren', 'kaas', 'brood', 'pasta-rijst', 'conserven', 'kruiden-sauzen', 'olie-azijn', 'bakken', 'diepvries', 'drinken', 'ontbijt', 'snacks', 'huishouden'] },
+                },
+              },
+            },
+          },
+        },
+      }],
+      run: async call => {
+        if (call.name !== 'nieuw_recept') return { content: 'Onbekende tool.', isError: true };
+        const r = call.input as any;
+        const ingredients = (Array.isArray(r?.ingredienten) ? r.ingredienten : []).flatMap((i: any) => i && typeof i.naam === 'string' && Number(i.hoeveelheid) > 0
+          ? [{ name: i.naam.trim(), amount: Number(i.hoeveelheid), unit: String(i.eenheid ?? 'st'), ...(i.categorie ? { category: String(i.categorie) } : {}) }] : []);
+        if (typeof r?.naam !== 'string' || !r.naam.trim() || !ingredients.length) return { content: 'Geef een naam en minstens één ingrediënt.', isError: true };
+        result = { name: r.naam.trim().slice(0, 80), minutes: Number(r.minuten) || recipe.minutes, steps: String(r.bereiding ?? '').slice(0, 1500), tags: Array.isArray(r.tags) ? r.tags.map(String).slice(0, 8) : recipe.tags, ingredients };
+        return { content: 'Opgeslagen.', isError: false };
+      },
+      maxSteps: 3,
+      maxTokens: 3000,
+    });
+    return result;
   }
 
   /** Verwerk een chatbericht: met een taalmodel als dat gekoppeld is, anders met vaste commando's. */

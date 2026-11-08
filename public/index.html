@@ -36,6 +36,17 @@
     </form>
     <label class="check small replace"><input type="checkbox" id="replace"> Ook bestaande voorstellen vervangen</label>
     <ol id="days" class="timeline" aria-label="Menu per dag"></ol>
+    <form class="pick-bar" id="pick-bar" aria-label="Aangevinkte gerechten vervangen" hidden>
+      <p class="pick-count" id="pick-count"></p>
+      <label class="pick-note">Wat moet er anders? <span class="muted">(mag leeg)</span>
+        <input id="pick-note" maxlength="300" autocomplete="off" placeholder="Bijv. met kippenpoten, zonder paprika, iets vegetarisch">
+      </label>
+      <p class="hint" id="pick-hint"></p>
+      <div class="row">
+        <button class="primary" id="pick-replace">Vervangen</button>
+        <button type="button" class="ghost" id="pick-cancel">Annuleren</button>
+      </div>
+    </form>
     <div class="week-actions">
       <button class="primary" id="approve-menu">Menu goedkeuren</button>
       <button class="secondary" id="to-cart">Naar boodschappen</button>

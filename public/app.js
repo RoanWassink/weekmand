@@ -164,6 +164,13 @@ function showTab(name) {
 $('tabs').onclick = e => { const b = e.target.closest('button'); if (b) showTab(b.dataset.tab); };
 $('chat-button').onclick = () => showTab('chat');
 
+// Terug in de app na een tijdje (bijv. na een wijziging via Telegram): de stand en de mand opnieuw ophalen.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !S || busy || Date.now() - lastLoad < 30_000) return;
+  planStale = true;
+  load().then(() => { if ($('tab-budget').classList.contains('active')) loadBudget(); }).catch(() => {});
+});
+
 // Het puntje op de chatknop: alleen voor meldingen die nieuwer zijn dan je laatste bezoek aan de chat.
 const SEEN_KEY = 'weekmand-meldingen-gezien';
 function noticesSeen() { try { return localStorage.getItem(SEEN_KEY) ?? ''; } catch { return ''; } }
@@ -185,8 +192,10 @@ window.addEventListener('hashchange', () => {
 
 // ───────────── Laden en tekenen ─────────────
 
+let lastLoad = 0;
 async function load() {
   S = await api('/api/state');
+  lastLoad = Date.now();
   renderHeader();
   renderWeek();
   renderCart();
@@ -259,19 +268,51 @@ function renderWeek() {
   }
   if (!marked) items.push(marker());
   put($('days'), items);
+  renderPickBar();
   $('approve-menu').hidden = !S.menu.days.some(day => day.meal?.status === 'proposed');
 }
+
+// Gerechten aanvinken om te vervangen, eventueel met een opmerking.
+const picked = new Set();
+function renderPickBar() {
+  for (const date of [...picked]) if (!S.menu.days.some(d => d.date === date && d.meal)) picked.delete(date);
+  const n = picked.size;
+  $('pick-bar').hidden = !n;
+  $('tab-week').classList.toggle('picking', !!n);
+  if (!n) return;
+  $('pick-count').textContent = `${n} ${n === 1 ? 'gerecht' : 'gerechten'} aangevinkt`;
+  $('pick-hint').textContent = S.ai
+    ? 'Met een opmerking past de AI het recept daarop aan. Leeg: Weekmand kiest een ander gerecht.'
+    : 'Weekmand kiest een ander gerecht; je opmerking geldt als wens.';
+  $('pick-replace').textContent = n === 1 ? 'Vervangen' : `Vervang ${n} gerechten`;
+}
+$('pick-bar').onsubmit = e => {
+  e.preventDefault();
+  const note = $('pick-note').value.trim();
+  run(async () => {
+    if (note && S.ai) toast('Recept aanpassen… dit duurt even.');
+    const r = await api('meal/replace', { dates: [...picked], note });
+    picked.clear();
+    $('pick-note').value = '';
+    planStale = true;
+    toast(r.replaced.map(x => `${x.day}: ${x.to}`).join(' · '));
+  });
+};
+$('pick-cancel').onclick = () => { picked.clear(); $('pick-note').value = ''; renderWeek(); };
 
 function dayRow(day, portions) {
   const m = day.meal;
   const [, , dd] = day.date.split('-');
   const servings = m?.servings ?? portions;
   const setServings = delta => run(() => api('meal/set', { date: day.date, recipeId: m.id, servings: Math.max(1, Math.round((servings + delta) * 100) / 100) }));
-  return el('li', { class: 'day' + (day.inOrder ? '' : ' out') + (m ? '' : ' empty') },
+  const toggle = e => { if (e.target.checked) picked.add(day.date); else picked.delete(day.date); e.target.closest('.day').classList.toggle('picked', e.target.checked); renderPickBar(); };
+  return el('li', { class: 'day' + (day.inOrder ? '' : ' out') + (m ? '' : ' empty') + (m && picked.has(day.date) ? ' picked' : '') },
     el('div', { class: 'day-date' }, el('span', { class: 'dow' }, day.day.slice(0, 2)), el('span', { class: 'dom' }, Number(dd))),
     el('div', { class: 'day-body' },
       m ? [
         el('div', { class: 'dish' },
+          el('label', { class: 'pick', title: 'Aanvinken om te vervangen' },
+            el('input', { type: 'checkbox', checked: picked.has(day.date) || undefined, 'aria-label': `${m.name} aanvinken om te vervangen`, onchange: toggle })),
           el('button', { type: 'button', class: 'dish-name', onclick: () => showRecipe(m.id, servings) }, m.name),
           m.status === 'proposed' ? el('span', { class: 'pill proposed' }, 'voorstel') : null),
         el('p', { class: 'day-meta' }, `${m.minutes} min · ${m.tags.filter(t => !['favoriet', 'picnic', 'bewaard', 'besteld'].includes(t)).slice(0, 3).join(', ')}${m.note ? ' · ' + m.note : ''}`),
