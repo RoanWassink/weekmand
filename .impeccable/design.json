@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-08T14:40:00Z",
+  "title": "Design System: Weekmand",
+  "extensions": {
+    "colorMeta": {
+      "basilicum": { "role": "primary", "displayName": "Basilicum", "canonical": "oklch(43% 0.1 155)", "tonalRamp": ["oklch(15% 0.1 155)", "oklch(26% 0.1 155)", "oklch(37% 0.1 155)", "oklch(48% 0.1 155)", "oklch(59% 0.1 155)", "oklch(70% 0.1 155)", "oklch(82% 0.07 155)", "oklch(95% 0.03 155)"] },
+      "basilicumschil": { "role": "secondary", "displayName": "Basilicumschil", "canonical": "oklch(33% 0.07 158)", "tonalRamp": ["oklch(15% 0.07 158)", "oklch(26% 0.07 158)", "oklch(37% 0.07 158)", "oklch(48% 0.07 158)", "oklch(59% 0.07 158)", "oklch(70% 0.06 158)", "oklch(82% 0.045 158)", "oklch(95% 0.02 158)"] },
+      "tomaat": { "role": "tertiary", "displayName": "Tomaat", "canonical": "oklch(55% 0.19 33)", "tonalRamp": ["oklch(15% 0.08 33)", "oklch(26% 0.12 33)", "oklch(37% 0.16 33)", "oklch(48% 0.19 33)", "oklch(59% 0.19 33)", "oklch(70% 0.15 33)", "oklch(82% 0.09 33)", "oklch(95% 0.03 33)"] },
+      "mosterd": { "role": "tertiary", "displayName": "Mosterd", "canonical": "oklch(51% 0.12 60)", "tonalRamp": ["oklch(15% 0.05 60)", "oklch(26% 0.08 60)", "oklch(37% 0.1 60)", "oklch(48% 0.12 60)", "oklch(59% 0.12 60)", "oklch(70% 0.11 60)", "oklch(82% 0.08 60)", "oklch(95% 0.04 70)"] },
+      "saliepapier": { "role": "neutral", "displayName": "Saliepapier", "canonical": "oklch(97.4% 0.008 145)", "tonalRamp": ["oklch(15% 0.01 145)", "oklch(26% 0.012 145)", "oklch(37% 0.014 145)", "oklch(48% 0.016 145)", "oklch(59% 0.016 145)", "oklch(70% 0.015 145)", "oklch(84% 0.018 145)", "oklch(97.4% 0.008 145)"] },
+      "inkt": { "role": "neutral", "displayName": "Inkt", "canonical": "oklch(23% 0.025 155)", "tonalRamp": ["oklch(15% 0.025 155)", "oklch(23% 0.025 155)", "oklch(35% 0.022 155)", "oklch(46% 0.02 155)", "oklch(59% 0.018 155)", "oklch(70% 0.015 155)", "oklch(82% 0.012 155)", "oklch(95% 0.008 155)"] }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Kop", "purpose": "Schermkoppen en de bezorgdatum bovenaan Week." },
+      "title": { "displayName": "Titel", "purpose": "Kopjes van groepen en kaarten." },
+      "body": { "displayName": "Tekst", "purpose": "Lopende tekst en lijstregels; hints maximaal 62ch." },
+      "label": { "displayName": "Label", "purpose": "Knoppen en statuslabels." },
+      "tab-label": { "displayName": "Tablabel", "purpose": "Labels in de tabbalk; nooit kleiner dan 0.75rem." }
+    },
+    "shadows": [
+      { "name": "geselecteerd", "value": "0 1px 2px oklch(0% 0 0 / .12), 0 2px 8px oklch(0% 0 0 / .06)", "purpose": "De actieve knop in een schakelaar." },
+      { "name": "zwevend", "value": "0 6px 24px oklch(0% 0 0 / .18)", "purpose": "De melding (toast) onderin." }
+    ],
+    "motion": [
+      { "name": "kleurwissel", "value": "background-color .15s, border-color .15s, color .15s", "purpose": "Hover en actief op knoppen; geen andere beweging in de bediening." },
+      { "name": "wegvegen", "value": "transform .2s, opacity .2s", "purpose": "Een regel in het voorstel wegvegen." }
+    ],
+    "breakpoints": [
+      { "name": "smal", "value": "419px", "purpose": "Daaronder verdwijnt het winkellabel uit de kopbalk." },
+      { "name": "zijbalk", "value": "960px", "purpose": "Vanaf hier wordt de tabbalk een zijbalk van 220px." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Hoofdknop",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "De ene hoofdactie per scherm.",
+      "html": "<button class=\"ds-btn-primary\">Wijzigingen naar Picnic sturen</button>",
+      "css": ".ds-btn-primary { min-height: 44px; padding: 0 16px; border: 1px solid var(--brand, oklch(43% 0.1 155)); border-radius: 10px; background: var(--brand, oklch(43% 0.1 155)); color: var(--brand-ink, oklch(99% 0.01 145)); font: 600 1rem system-ui, sans-serif; cursor: pointer; transition: background-color .15s, border-color .15s; } .ds-btn-primary:hover { background: var(--brand-hover, oklch(37% 0.1 155)); border-color: var(--brand-hover, oklch(37% 0.1 155)); } .ds-btn-primary:focus-visible { outline: 2px solid var(--brand, oklch(43% 0.1 155)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Secundaire knop",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Een tweede, rustige actie naast de hoofdknop.",
+      "html": "<button class=\"ds-btn-secondary\">Foto van bon</button>",
+      "css": ".ds-btn-secondary { min-height: 44px; padding: 0 16px; border: 1px solid color-mix(in oklch, var(--brand, oklch(43% 0.1 155)) 50%, transparent); border-radius: 10px; background: transparent; color: var(--brand-text, oklch(39% 0.1 155)); font: 600 1rem system-ui, sans-serif; cursor: pointer; transition: background-color .15s; } .ds-btn-secondary:hover { background: var(--brand-soft, oklch(93.5% 0.04 150)); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--brand, oklch(43% 0.1 155)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Invoerveld",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Tekst- en getalvelden met het label erboven.",
+      "html": "<label class=\"ds-field\">Budget per maand (€)<input class=\"ds-input\" inputmode=\"decimal\" placeholder=\"240\"></label>",
+      "css": ".ds-field { display: grid; gap: 4px; font: 550 .875rem system-ui, sans-serif; color: var(--ink-2, oklch(46% 0.02 155)); } .ds-input { min-height: 44px; padding: 0 12px; border: 1px solid var(--line-strong, oklch(84% 0.018 145)); border-radius: 10px; background: var(--surface, oklch(99.7% 0.003 145)); color: var(--ink, oklch(23% 0.025 155)); font: 400 1rem system-ui, sans-serif; } .ds-input:hover { border-color: color-mix(in oklch, var(--brand, oklch(43% 0.1 155)) 40%, var(--line-strong, oklch(84% 0.018 145))); } .ds-input:focus-visible { outline: 2px solid var(--brand, oklch(43% 0.1 155)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Filterchip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Filters en snelle keuzes, bijvoorbeeld het receptenoverzicht.",
+      "html": "<div class=\"ds-chips\"><button class=\"ds-chip\" aria-pressed=\"true\">Gegeten</button><button class=\"ds-chip\" aria-pressed=\"false\">Favorieten</button></div>",
+      "css": ".ds-chips { display: flex; flex-wrap: wrap; gap: 8px; } .ds-chip { min-height: 36px; padding: 0 12px; border: 1px solid var(--line-strong, oklch(84% 0.018 145)); border-radius: 999px; background: var(--surface, oklch(99.7% 0.003 145)); color: var(--ink, oklch(23% 0.025 155)); font: 600 .875rem system-ui, sans-serif; cursor: pointer; } .ds-chip[aria-pressed=\"true\"] { background: var(--brand, oklch(43% 0.1 155)); border-color: var(--brand, oklch(43% 0.1 155)); color: var(--brand-ink, oklch(99% 0.01 145)); } .ds-chip:focus-visible { outline: 2px solid var(--brand, oklch(43% 0.1 155)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Kaart",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Een samenhangende, bedienbare groep; rand, geen schaduw.",
+      "html": "<section class=\"ds-card\"><h3 class=\"ds-card-title\">Per categorie</h3><p class=\"ds-card-text\">Groente en fruit · € 21,46</p></section>",
+      "css": ".ds-card { padding: 16px 24px; border: 1px solid var(--line, oklch(90.5% 0.014 145)); border-radius: 14px; background: var(--surface, oklch(99.7% 0.003 145)); color: var(--ink, oklch(23% 0.025 155)); } .ds-card-title { margin: 0 0 8px; font: 650 1.0625rem/1.3 system-ui, sans-serif; } .ds-card-text { margin: 0; font: 400 1rem/1.5 system-ui, sans-serif; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Schakelaar",
+      "kind": "nav",
+      "refersTo": "segmented",
+      "description": "Twee of drie weergaven van hetzelfde scherm, zoals Menu | Recepten.",
+      "html": "<nav class=\"ds-switch\" aria-label=\"Menu of recepten\"><a href=\"#week\" aria-current=\"page\">Menu</a><a href=\"#recipes\">Recepten</a></nav>",
+      "css": ".ds-switch { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface-2, oklch(95% 0.013 145)); } .ds-switch a { display: grid; place-items: center; min-height: 38px; border-radius: 9px; color: var(--ink-2, oklch(46% 0.02 155)); font: 600 .9rem system-ui, sans-serif; text-decoration: none; } .ds-switch a:hover { color: var(--ink, oklch(23% 0.025 155)); } .ds-switch a[aria-current=\"page\"] { background: var(--surface, oklch(99.7% 0.003 145)); color: var(--ink, oklch(23% 0.025 155)); box-shadow: 0 1px 2px oklch(0% 0 0 / .12), 0 2px 8px oklch(0% 0 0 / .06); } .ds-switch a:focus-visible { outline: 2px solid var(--brand, oklch(43% 0.1 155)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Tabbalk",
+      "kind": "nav",
+      "refersTo": "nav-tab",
+      "description": "Vijf bestemmingen onderin op de telefoon.",
+      "html": "<nav class=\"ds-tabs\" aria-label=\"Hoofdmenu\"><a href=\"#week\" aria-current=\"page\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" aria-hidden=\"true\"><rect x=\"3\" y=\"5\" width=\"18\" height=\"16\" rx=\"2\"/><path d=\"M3 10h18M8 3v4M16 3v4\"/></svg>Week</a><a href=\"#cart\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" aria-hidden=\"true\"><path d=\"M3 4h2l2.4 11h10.2L20 8H6.2\"/><circle cx=\"9\" cy=\"19.5\" r=\"1.5\"/><circle cx=\"17\" cy=\"19.5\" r=\"1.5\"/></svg>Mand</a><a href=\"#pantry\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" aria-hidden=\"true\"><rect x=\"5\" y=\"2.5\" width=\"14\" height=\"19\" rx=\"2\"/><path d=\"M5 10h14M8.5 6v1.5M8.5 13v2\"/></svg>Voorraad</a></nav>",
+      "css": ".ds-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line, oklch(90.5% 0.014 145)); background: var(--surface, oklch(99.7% 0.003 145)); } .ds-tabs a { position: relative; display: grid; justify-items: center; gap: 2px; min-height: 62px; padding: 8px 0; color: var(--ink-2, oklch(46% 0.02 155)); font: 600 .75rem/1.2 system-ui, sans-serif; text-decoration: none; } .ds-tabs a:hover { color: var(--ink, oklch(23% 0.025 155)); } .ds-tabs svg { width: 22px; height: 22px; } .ds-tabs a[aria-current=\"page\"] { color: var(--brand-text, oklch(39% 0.1 155)); } .ds-tabs a[aria-current=\"page\"]::before { content: \"\"; position: absolute; top: 0; left: 30%; right: 30%; height: 3px; border-radius: 0 0 3px 3px; background: var(--brand, oklch(43% 0.1 155)); } .ds-tabs a:focus-visible { outline: 2px solid var(--brand, oklch(43% 0.1 155)); outline-offset: -2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Het weekbord in de keuken",
+    "overview": "Weekmand is het bord waar het huishouden de week op plant: wat er gegeten wordt, wanneer de bezorging komt en wat er nog in huis moet. Het hangt er rustig bij en je ziet in één blik waar je staat. De week loopt als een tijdlijn van boven naar beneden, en de bezorging staat erin als een markering. Het is een werkinstrument (Impeccable-modus Operate): bekende patronen, vaste plekken, en geen versiering die tussen jou en de boodschappen in staat.\n\nDe sfeer is die van een lichte keuken: een salie-getinte ondergrond, een donkergroene kopbalk als lijst om het bord, en basilicumgroen voor alles wat je kunt doen of wat actief is. Tomaatrood komt pas op het bord als het moet: de deadline nadert of er is iets mis. De dichtheid is gemiddeld. De telefoon gaat voor, en elke regel is met een duim te raken. Op de computer schuiven dezelfde onderdelen naar een zijbalk.",
+    "keyCharacteristics": [
+      "Telefoon eerst; vijf tabs onderin, chat rechtsboven in de kopbalk.",
+      "De week als tijdlijn met de bezorging als markering.",
+      "Groen voor wat je kunt doen, tomaat alleen voor tijd en urgentie, mosterd voor tekort en extra.",
+      "Plat met dunne randen; schaduw alleen voor wat erboven ligt.",
+      "Systeemletter, vaste rem-schaal, cijfers in kolommen tabulair."
+    ],
+    "rules": [
+      { "name": "The Tomato Rule", "body": "Tomaat betekent tijd of urgentie. Het staat nooit op een knop, kop of versiering.", "section": "colors" },
+      { "name": "The One Green Rule", "body": "Er is één accentfamilie. Een nieuwe status krijgt een bestaande signaalkleur, geen nieuwe tint.", "section": "colors" },
+      { "name": "The Tabular Rule", "body": "Bedragen, datums en hoeveelheden die onder elkaar staan, gebruiken tabulaire cijfers.", "section": "typography" },
+      { "name": "The Five Tabs Rule", "body": "Onderin staan hooguit vijf bestemmingen (Week, Mand, Voorraad, Budget, Meer). Een nieuw onderdeel krijgt een plek binnen een bestaande tab (zoals Recepten binnen Week) of in de kopbalk (zoals Chat), geen zesde tab.", "section": "layout" },
+      { "name": "The Flat Board Rule", "body": "Kaarten hebben een rand en geen schaduw. Een schaduw betekent dat iets boven het bord ligt.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do houd één hoofdactie per scherm in Basilicum; de rest is secundair of ghost.",
+      "Do gebruik Tomaat alleen voor de deadline en nieuwe meldingen (The Tomato Rule).",
+      "Do zet een nieuw onderdeel binnen een bestaande tab of in de kopbalk (The Five Tabs Rule).",
+      "Do gebruik tabulaire cijfers voor bedragen, datums en hoeveelheden in lijsten.",
+      "Do maak elk raakbaar element minstens 44 px, ook als het teken kleiner is."
+    ],
+    "donts": [
+      "Don't voeg een zesde tab toe of verklein de tablabels onder 0.75rem om iets te laten passen.",
+      "Don't geef kaarten een schaduw; schaduw is voor wat boven het bord ligt.",
+      "Don't gebruik inline style-attributen in HTML; de CSP blokkeert ze. Zet maten via het CSSOM of een klasse.",
+      "Don't gebruik emoji of tekens als icoon; iconen zijn getekende lijn-SVG's.",
+      "Don't zet twee schakelaars onder elkaar; een tweede keuze wordt chips."
+    ]
+  }
+}

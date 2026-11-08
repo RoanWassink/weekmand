@@ -8,3 +8,4 @@
 - De mandberekening is idempotent: wat de gebruiker zelf toevoegt blijft staan; Weekmand beheert alleen haar eigen toevoegingen (het grootboek). Houd die eigenschap vast in `test/planner.test.ts`.
 - Alleen "erasable" TypeScript (geen enums, namespaces of parameter properties): Node draait de bestanden zonder build.
 - Behoud de demowinkel als lokale testomgeving. Voer `npm test` uit bij elke wijziging.
+- UI- en ontwerpwerk (webapp in `public/`) gaat via de skill **Impeccable** (`.claude/skills/impeccable`, voor Codex `.agents/skills/impeccable`, versie 4.7.0). De webapp is een Operate-oppervlak: bekende patronen, op de telefoon hooguit vijf tabs. De launcher `scripts/impeccable` downloadt een programma; draai die alleen met akkoord van de gebruiker.
