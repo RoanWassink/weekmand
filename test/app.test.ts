@@ -217,8 +217,10 @@ test('gedeeld overzicht: hergebruikt tot er iets verandert of het te oud is', as
   const changed = await app.currentPlan();
   assert.notEqual(changed.id, again.id, 'na een wijziging opnieuw berekend');
   assert.ok(changed.lines.some(l => l.product.startsWith('Krat pils')));
-  clock.now += 11 * 60_000;
-  assert.notEqual((await app.currentPlan()).id, changed.id, 'na 10 minuten opnieuw berekend');
+  clock.now += 6 * 36e5;
+  assert.equal((await app.currentPlan()).id, changed.id, 'zes uur later nog hetzelfde: Picnic niet opnieuw gevraagd');
+  clock.now += 6 * 36e5 + 60_000;
+  assert.notEqual((await app.currentPlan()).id, changed.id, 'na twaalf uur opnieuw berekend');
 });
 
 test('gedeeld overzicht: overslaan is lokaal en leest de mand niet opnieuw', async () => {
@@ -253,9 +255,16 @@ test('gedeeld overzicht: overslaan is lokaal en leest de mand niet opnieuw', asy
   const n = reads;
   await app.currentPlan();
   assert.equal(reads, n + 1, 'na doorvoeren opnieuw gelezen');
-  clock.now += 11 * 60_000;
+  clock.now += 11 * 36e5;
   await app.currentPlan();
-  assert.equal(reads, n + 2, 'een lezing ouder dan 10 minuten wordt ververst');
+  await app.cart();
+  assert.equal(reads, n + 1, 'binnen twaalf uur geen nieuwe lezing');
+  clock.now += 36e5 + 60_000;
+  await app.currentPlan();
+  assert.equal(reads, n + 2, 'een lezing ouder dan twaalf uur wordt ververst');
+  // Ververs uit Picnic (plan) leest altijd vers.
+  await app.plan();
+  assert.equal(reads, n + 3);
 });
 
 test('voorraad opnieuw opbouwen uit de laatste levering', async () => {

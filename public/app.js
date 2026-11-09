@@ -546,7 +546,16 @@ async function calculate(force = false, { quiet = false } = {}) {
 
 /** Het voorstel zonder id en tijden: gelijk betekent dat er niets te zien veranderde. */
 const planSignature = p => JSON.stringify({ ...p, id: null, computedAt: null, cartReadAt: null });
-const planReadText = () => planStale ? 'Bijwerken…' : `Picnic-mand gelezen om ${timeFmt.format(new Date(plan.cartReadAt ?? plan.computedAt))} · voor het hele huishouden`;
+const planReadText = () => planStale ? 'Bijwerken…' : `Picnic-mand gelezen ${readMoment(plan.cartReadAt ?? plan.computedAt)} · voor het hele huishouden`;
+/** "om 08:12" vandaag, anders "gisteren om 20:01" of "ma om 20:01". */
+function readMoment(iso) {
+  const d = new Date(iso);
+  const day = x => x.toLocaleDateString('sv-SE');
+  const today = new Date();
+  const yesterday = new Date(today.getTime() - 864e5);
+  const when = day(d) === day(today) ? '' : day(d) === day(yesterday) ? 'gisteren ' : dayShort(day(d)) + ' ';
+  return `${when}om ${timeFmt.format(d)}`;
+}
 
 function savePlan() {
   try { localStorage.setItem(PLAN_KEY, JSON.stringify({ mode: S?.shop.mode, plan })); } catch { /* privévenster of vol */ }
@@ -645,7 +654,7 @@ function renderPlan() {
     el('p', { class: 'muted small' }, changes.length ? 'Nog niet doorgevoerd. Alleen deze verschillen gaan naar Picnic; wat je zelf in Picnic zet blijft staan.' : 'Alles wat nodig is zit al in je Picnic-mand. Afrekenen doe je in de Picnic-app.'),
     el('p', { class: 'muted small' }, `Voor ${plan.meals.length} maaltijden: ${plan.meals.map(m => m.name).join(', ') || 'geen'}.`),
     el('div', { class: 'row' }, el('span', { class: 'muted small grow', id: 'plan-read' }, planReadText()),
-      btn('Opnieuw berekenen', () => run(() => calculate(true), { reload: false }), 'small ghost')),
+      btn('Ververs uit Picnic', () => run(() => calculate(true), { reload: false }), 'small ghost')),
     changes.length ? el('p', { class: 'hint with-icon' }, icon('swipe'), 'Veeg een regel opzij om hem deze keer over te slaan.') : null,
     changes.length ? searchBox('plan-lines', 'Zoek in het voorstel') : null,
     el('div', { id: 'plan-lines' }, ...changes.map(l => swipeable(el('div', { class: 'line' },
@@ -669,7 +678,8 @@ function renderPlan() {
     plan.lines.length > changes.length ? el('p', { class: 'muted small' }, `${plan.lines.length - changes.length} regels staan al goed in de mand.`) : null,
     ...plan.missing.map(m => el('div', { class: 'pantry-item' }, el('span', { class: 'grow warn small' }, `${m.name}: geen product gekoppeld`), btn('Koppel', () => linkDialog(m.key), 'small'))),
     changes.length ? btn(`Wijzigingen naar Picnic sturen (${changes.length})`, () => planStale ? toast('Even wachten: het voorstel wordt bijgewerkt.') : run(async () => {
-      const r = await api('apply', { id: plan.id });
+      // Doorvoeren leest de mand vers. Veranderde hij in de Picnic-app, dan het nieuwe voorstel tonen.
+      const r = await api('apply', { id: plan.id }).catch(async e => { await calculate().catch(() => {}); throw e; });
       toast(r.summary);
       await calculate();
     }), 'primary wide') : null));

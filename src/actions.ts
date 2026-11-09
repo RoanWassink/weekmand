@@ -35,7 +35,7 @@ async function nextStep(app: Weekmand, prefix = ''): Promise<Notice> {
     return { text: (prefix ? prefix + '\n\n' : '') + next.text + ' (ja/nee)', buttons: questionButtons(next) };
   }
   app.store.set('pendingQuestions', { questions: [], asked: null });
-  const plan = await app.plan();
+  const plan = await app.currentPlan();
   const summary = planSummary(plan);
   const changes = plan.lines.some(l => l.add || l.remove);
   return { text: (prefix ? prefix + '\n\n' : '') + formatPlan(summary), ...(changes ? { buttons: applyButtons(plan.id) } : {}) };

@@ -59,17 +59,64 @@ test('zonder "onthouden" blijft de sessie alleen in het geheugen', async t => {
   assert.equal(secrets.get('picnicAuthKey'), undefined);
 });
 
-test('verlopen sessie: status verlopen, bewaarde sleutel weg, melding', async t => {
+test('Picnic remt af (403 zonder code): sleutel blijft, pauze, daarna gewoon verder', async t => {
+  let throttled = true;
+  let calls = 0;
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return throttled ? new Response('<html><title>403 Forbidden</title></html>', { status: 403, headers: { 'Content-Type': 'text/html' } }) : Response.json(rawCart);
+  });
+  const secrets = new Secrets(null);
+  secrets.set('picnicAuthKey', 'goed');
+  const shop = new PicnicShop(secrets);
+  let now = Date.parse('2026-11-09T06:05:00Z');
+  shop.now = () => now;
+  let expired = 0;
+  shop.onExpired = () => { expired++; };
+  await assert.rejects(shop.readCart(), (e: Problem) => e.status === 503 && /07:20/.test(e.message) && /bewaard/.test(e.message));
+  assert.equal(calls, 2, 'het verzoek en één controle');
+  assert.equal(shop.status, 'connected');
+  assert.equal(secrets.get('picnicAuthKey'), 'goed');
+  // Tijdens de pauze gaat er niets naar Picnic.
+  now += 10 * 60_000;
+  await assert.rejects(shop.readCart(), { status: 503 });
+  assert.equal(calls, 2);
+  // Nog steeds afgeremd: langere pauze (30 minuten).
+  now += 6 * 60_000;
+  await assert.rejects(shop.readCart(), (e: Problem) => /07:51/.test(e.message));
+  // Uren afremmen is nooit "verlopen".
+  for (let i = 0; i < 10; i++) { now += 61 * 60_000; await assert.rejects(shop.readCart(), { status: 503 }); }
+  assert.equal(expired, 0);
+  // Picnic doet het weer: alles normaal, pauzes vergeten.
+  throttled = false;
+  now += 61 * 60_000;
+  assert.equal((await shop.readCart()).lines.length, 2);
+  assert.equal(expired, 0);
+  assert.equal(secrets.get('picnicAuthKey'), 'goed');
+});
+
+test('sessie echt afgewezen (401): pas na zes uur verlopen, sleutel blijft bewaard', async t => {
+  t.mock.method(console, 'error', () => {});
   t.mock.method(globalThis, 'fetch', async () => Response.json({ error: { code: 'AUTH_ERROR' } }, { status: 401 }));
   const secrets = new Secrets(null);
   secrets.set('picnicAuthKey', 'old');
   const shop = new PicnicShop(secrets);
+  let now = Date.parse('2026-11-09T06:00:00Z');
+  shop.now = () => now;
   let expired = 0;
   shop.onExpired = () => { expired++; };
+  await assert.rejects(shop.readCart(), { status: 503 });
+  assert.equal(shop.status, 'connected');
+  now += 5 * 36e5;
+  await assert.rejects(shop.readCart(), { status: 503 });
+  assert.equal(expired, 0);
+  now += 36e5;
   await assert.rejects(shop.readCart(), (e: Problem) => e.status === 401 && /verlopen/.test(e.message));
   assert.equal(shop.status, 'expired');
-  assert.equal(secrets.get('picnicAuthKey'), undefined);
   assert.equal(expired, 1);
+  assert.equal(secrets.get('picnicAuthKey'), 'old', 'bewaard: na een herstart probeert Weekmand hem opnieuw');
+  assert.equal(new PicnicShop(secrets).status, 'connected');
 });
 
 test('zoeken gebruikt alleen geldige producten', async () => {

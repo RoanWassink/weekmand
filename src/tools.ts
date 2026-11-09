@@ -186,7 +186,7 @@ export const tools: Tool[] = [
     }),
     run: async (app, a, ctx) => {
       const added = a.items?.length ? await app.addItems(a.items.map((i: any) => ({ ...i, productId: i.product_id }))) : [];
-      const plan = await app.plan();
+      const plan = await app.currentPlan();
       if (plan.lines.some(l => l.add || l.remove)) ctx.pendingReview?.(plan.id);
       return { added, ...planSummary(plan) };
     },
@@ -197,7 +197,7 @@ export const tools: Tool[] = [
     input: obj({ ingredient: str('Het ingrediënt, zoals in missing_products of het recept.'), product_id: str('Het id uit search_products.'), product_name: str('De productnaam uit search_products.'), per_pack: num('Hoeveel van het ingrediënt (in zijn eigen eenheid) één verpakking dekt.') }, ['ingredient', 'product_id']),
     run: async (app, a, ctx) => {
       const link = await app.linkProductFor(a.ingredient, a.product_id, { productName: a.product_name, perPack: a.per_pack });
-      const plan = await app.plan();
+      const plan = await app.currentPlan();
       if (plan.lines.some(l => l.add || l.remove)) ctx.pendingReview?.(plan.id);
       return { linked: `${link.name} (${link.unitQuantity}) voor ${a.ingredient}`, ...planSummary(plan) };
     },
@@ -208,7 +208,7 @@ export const tools: Tool[] = [
     input: obj({ items: { type: 'array', minItems: 1, maxItems: 25, items: { type: 'string' } } }, ['items']),
     run: async (app, a, ctx) => {
       const removed = await app.removeItems(a.items);
-      const plan = await app.plan();
+      const plan = await app.currentPlan();
       if (plan.lines.some(l => l.add || l.remove)) ctx.pendingReview?.(plan.id);
       return { removed, ...planSummary(plan) };
     },

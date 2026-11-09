@@ -40,8 +40,8 @@ test('herstart: de laatste mandberekening blijft staan (tot tien minuten, of tot
   assert.notEqual((await third.app.currentPlan()).id, plan.id);
   assert.equal(third.reads(), 1);
 
-  // Ouder dan tien minuten: opnieuw lezen.
-  clock.now += 11 * 60_000;
+  // Ouder dan twaalf uur: opnieuw lezen.
+  clock.now += 12 * 36e5 + 60_000;
   const fourth = start();
   await fourth.app.currentPlan();
   assert.equal(fourth.reads(), 1);

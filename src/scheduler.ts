@@ -59,13 +59,14 @@ export class Scheduler {
       }
       if (app.shopMode === 'picnic' && app.picnic.ready()) {
         const last = app.store.get<number>('lastImport', 0);
-        if (app.now() - last > 6 * 36e5) {
+        // Twee keer per dag: nieuwe bezorgingen (voorraad) en Picnic-recepten.
+        if (app.now() - last > 12 * 36e5) {
           app.store.set('lastImport', app.now());
           await app.importHistory().catch(error => console.error('Picnic-import:', error.message));
           await app.importPicnicRecipes().catch(error => console.error('Picnic-recepten:', error.message));
         }
-        // Elk uur maten en aanbiedingsprijzen bijwerken, zodat het overzicht zelf snel blijft.
-        if (app.now() - app.store.get<number>('lastPriceRefresh', 0) > 36e5) {
+        // Eén keer per dag maten en aanbiedingsprijzen bijwerken, zodat het overzicht zelf snel blijft.
+        if (app.now() - app.store.get<number>('lastPriceRefresh', 0) > 24 * 36e5) {
           app.store.set('lastPriceRefresh', app.now());
           await app.refreshPrices().catch(error => console.error('Prijzen:', error.message));
         }
@@ -86,10 +87,14 @@ export class Scheduler {
           app.notify({ text: `De AI heeft ${r.matched.length} ${r.matched.length === 1 ? 'regel' : 'regels'} van je AH-bonnen herkend en bij de voorraad geteld${r.unknown.length ? `; ${r.unknown.length} bleef onbekend (${r.unknown.slice(0, 3).join(', ')}). Koppel die zelf onder Meer → Albert Heijn.` : '.'}` });
         }
       }
-      // Budget, elk uur: nieuwe aankopen, een paar oudere bonnen uitsplitsen, producten laten indelen, seintje bij het budget.
-      if (app.now() - app.store.get<number>('spendLastTry', 0) > 36e5) {
+      // Budget, twee keer per dag: nieuwe aankopen en een stuk oudere bonnen uitsplitsen.
+      if (app.now() - app.store.get<number>('spendLastTry', 0) > 12 * 36e5) {
         app.store.set('spendLastTry', app.now());
-        if (app.picnic.ready() || app.ah.linked) await app.syncSpending().catch(error => console.error('Budget:', error.message));
+        if (app.picnic.ready() || app.ah.linked) await app.syncSpending({ details: 12 }).catch(error => console.error('Budget:', error.message));
+      }
+      // Elk uur (zonder Picnic): producten laten indelen en een seintje bij het budget.
+      if (app.now() - app.store.get<number>('labelLastTry', 0) > 36e5) {
+        app.store.set('labelLastTry', app.now());
         await app.labelProducts().catch(error => console.error('Producten indelen:', error.message));
         app.budgetAlerts();
       }

@@ -415,7 +415,7 @@ Twijfel je tussen nodig en extra, kies dan nodig. Roep deel_in precies één kee
       }
     }
     if (changedList) {
-      const plan = await app.plan();
+      const plan = await app.currentPlan();
       if (plan.lines.some(l => l.add || l.remove)) ctx.pendingReview?.(plan.id);
       replies.push(formatPlan(planSummary(plan)));
     }

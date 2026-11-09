@@ -142,6 +142,13 @@ export type PicnicStatus = 'disconnected' | 'sms' | 'connected' | 'expired';
  * automatische meldingen na een herstart blijven werken. Picnic vernieuwt de sleutel soms in een
  * antwoord; die nieuwe sleutel wordt dan bijgewerkt.
  */
+/** Status, Picnics foutcode en (bij een HTML-pagina zonder code) een stukje tekst; nooit de sessiesleutel. */
+function logPicnicError(label: string, error: unknown) {
+  const { status, code, body } = (error ?? {}) as { status?: number; code?: string | null; body?: unknown };
+  const text = !code && typeof body === 'string' ? body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+  console.error(label, status ?? '', code ?? (error as Error)?.name ?? '', text);
+}
+
 export class PicnicShop implements Shop {
   readonly kind = 'picnic' as const;
   readonly label = 'Picnic';
@@ -151,6 +158,16 @@ export class PicnicShop implements Shop {
   #expired = false;
   #secrets: Secrets;
   onExpired: (() => void) | null = null;
+  /** Klok (tests zetten hem vast). */
+  now: () => number = Date.now;
+  /**
+   * Weigert Picnic ook het lezen van de mand, dan rust Weekmand even (15, 30, daarna 60 minuten)
+   * in plaats van de sessie weg te gooien: een 403 zonder foutcode is Picnic die afremt.
+   */
+  #pausedUntil = 0;
+  #strikes = 0;
+  /** Sinds wanneer Picnic de sessie zelf afwijst (401); na zes uur volgt de melding "verlopen". */
+  #authRefusedSince: number | null = null;
   /** Gemeld bij het lezen van de mand en bij zoeken: product-id → afbeelding-id. */
   onImages: ((images: Record<string, string>) => void) | null = null;
   #details = new Map<string, { at: number; value: ProductDetails }>();
@@ -183,6 +200,7 @@ export class PicnicShop implements Shop {
       this.#pending = !!result.secondFactorAuthenticationRequired;
       this.#remember = remember;
       this.#expired = false;
+      this.#resetRefusals();
       this.#persist();
     } catch (error) {
       throw this.#problem(error);
@@ -204,8 +222,11 @@ export class PicnicShop implements Shop {
     this.#client = null;
     this.#pending = false;
     this.#expired = false;
+    this.#resetRefusals();
     this.#secrets.set('picnicAuthKey', undefined);
   }
+
+  #resetRefusals() { this.#pausedUntil = 0; this.#strikes = 0; this.#authRefusedSince = null; }
 
   #persist() {
     if (this.#remember && this.#client && !this.#pending && this.#client.authKey) {
@@ -215,13 +236,34 @@ export class PicnicShop implements Shop {
     }
   }
 
+  /**
+   * Picnic wijst de sessie al uren af. De bewaarde sleutel blijft staan: na een herstart probeert
+   * Weekmand hem opnieuw, en opnieuw aanmelden vervangt hem.
+   */
   #expire(): Problem {
     this.#client = null;
     this.#pending = false;
     this.#expired = true;
-    this.#secrets.set('picnicAuthKey', undefined);
+    this.#resetRefusals();
     this.onExpired?.();
     return new Problem(401, 'Je Picnic-sessie is verlopen. Meld je opnieuw aan bij Picnic.');
+  }
+
+  /** Picnic weigerde ook de controle: even rusten, en pas na zes uur afwijzen "verlopen" melden. */
+  #refused(status: number | undefined, code: string | null | undefined): Problem {
+    const now = this.now();
+    if (status === 401 || code) {
+      this.#authRefusedSince ??= now;
+      if (now - this.#authRefusedSince >= 6 * 36e5) return this.#expire();
+    }
+    this.#strikes++;
+    this.#pausedUntil = now + Math.min(60, 15 * 2 ** (this.#strikes - 1)) * 60_000;
+    return this.#pauseProblem();
+  }
+
+  #pauseProblem() {
+    const at = new Intl.DateTimeFormat('nl-NL', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Amsterdam' }).format(this.#pausedUntil);
+    return new Problem(503, `Picnic weigert Weekmand even. Je sessie blijft bewaard; Weekmand probeert het om ${at} opnieuw.`);
   }
 
   #problem(error: unknown): Problem {
@@ -236,24 +278,30 @@ export class PicnicShop implements Shop {
 
   async #call<T>(fn: (client: Client) => Promise<T>): Promise<T> {
     if (!this.#client || this.#pending) throw new Problem(409, 'Meld je eerst aan bij Picnic.');
+    // Tijdens een rustpauze geen verzoeken: dat zou Picnic alleen langer laten weigeren.
+    if (this.now() < this.#pausedUntil) throw this.#pauseProblem();
     const client = this.#client;
     try {
       const value = await fn(client);
+      this.#resetRefusals();
       this.#persist();
       return value;
     } catch (error) {
-      const { status, code } = (error ?? {}) as { status?: number; code?: string };
-      console.error('Picnic-fout', status ?? '', code ?? (error as Error)?.name ?? '');
+      const { status } = (error ?? {}) as { status?: number };
+      logPicnicError('Picnic-fout', error);
       if (status === 401 || status === 403) {
         // Een weigering betekent niet altijd een verlopen sessie (bijv. te veel zoekopdrachten).
-        // Alleen als ook het lezen van de mand geweigerd wordt, is de sessie echt verlopen.
+        // Alleen als ook het lezen van de mand geweigerd wordt, rust Weekmand even.
         try {
           await client.cart.getCart();
           throw new Problem(503, 'Picnic weigerde dit verzoek even. Probeer het over een paar minuten opnieuw.');
         } catch (check) {
           if (check instanceof Problem) throw check;
-          const s = (check as { status?: number })?.status;
-          if (s === 401 || s === 403) throw this.#expire();
+          const c = (check ?? {}) as { status?: number; code?: string | null };
+          if (c.status === 401 || c.status === 403) {
+            logPicnicError('Picnic weigert ook de mand', check);
+            throw this.#refused(c.status, c.code);
+          }
           throw this.#problem(check);
         }
       }
