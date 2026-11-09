@@ -112,7 +112,7 @@ export class HomeAssistantBridge {
       else if (command === 'approve') reply = (await handleAction(app, 'menu:approve')).text;
       else if (command === 'propose') { await app.proposeMenu({ wish: payload === 'PRESS' ? '' : payload }); reply = 'Nieuw weekmenu voorgesteld.'; }
       else if (command === 'apply') {
-        const plan = await app.plan();
+        const plan = await app.currentPlan();
         reply = (await app.applyPlan(plan.id)).summary;
       } else return;
     } catch (error) {

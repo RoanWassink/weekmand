@@ -153,7 +153,8 @@ async function state(req: IncomingMessage) {
 
 type Handler = (input: Record<string, any>, req: IncomingMessage) => Promise<unknown> | unknown;
 const ui: Record<string, Handler> = {
-  plan: async () => { const plan = await app.plan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
+  // "Ververs uit Picnic": mand en bezorgmomenten vers lezen.
+  plan: async () => { await app.slots(true).catch(() => []); const plan = await app.plan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
   'plan/current': async () => { const plan = await app.currentPlan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
   product: async i => app.productInfo(String(i.id ?? '')),
   apply: async i => app.applyPlan(String(i.id)),

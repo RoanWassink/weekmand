@@ -62,6 +62,12 @@ export function baseName(name: string) {
   return normalize(name.replace(/\d+(?:[.,]\d+)?/g, ' ')).replace(sizeWords, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Hoe lang een lezing van de Picnic-mand en de bezorgmomenten goed blijft: hooguit twee keer per
+ * dag vanzelf. "Ververs uit Picnic" en doorvoeren lezen altijd vers.
+ */
+export const PICNIC_READ_INTERVAL = 12 * 36e5;
+
 export class Weekmand {
   readonly store: Store;
   readonly secrets: Secrets;
@@ -125,7 +131,7 @@ export class Weekmand {
     }
     // Na een herstart de laatste mandberekening (hooguit tien minuten oud) meteen weer gebruiken.
     const snap = this.store.get<PlanSnapshot | null>('planSnapshot', null);
-    if (snap && this.now() - snap.at >= 0 && this.now() - snap.at < 10 * 60_000 && snap.shopMode === this.shopMode) {
+    if (snap && this.now() - snap.at >= 0 && this.now() - snap.at < PICNIC_READ_INTERVAL && snap.shopMode === this.shopMode) {
       this.#planCache = { plan: snap.plan, at: snap.at, generation: this.#generation };
       this.#cartRead = { at: snap.cartAt, shop: this.shop, cart: snap.cart };
       this.#snapshot = true;
@@ -193,7 +199,7 @@ export class Weekmand {
   async slots(force = false): Promise<DeliverySlot[]> {
     if (!this.shop.ready()) return [];
     const age = this.#slots ? this.now() - this.#slots.at : Infinity;
-    if (!force && age >= 0 && age < 10 * 60_000) return this.#slots!.slots;
+    if (!force && age >= 0 && age < PICNIC_READ_INTERVAL) return this.#slots!.slots;
     const slots = this.shop === this.mock ? await this.mock.slots(this.now()) : await this.shop.slots();
     this.#slots = { at: this.now(), slots };
     return slots;
@@ -736,7 +742,7 @@ export class Weekmand {
       const regular = regulars.find(r => r.enabled && ((def && r.key === def.key) || normalize(r.name).includes(query)));
       const key = def?.key ?? regular?.productId;
       if (!key) {
-        const cart = this.shop.ready() ? await this.shop.readCart() : null;
+        const cart = this.shop.ready() ? (await this.#readCart(this.shop, PICNIC_READ_INTERVAL)).cart : null;
         const line = cart?.lines.find(l => normalize(l.name).includes(query));
         check(line, `Ik vind "${name}" niet op de lijst of in de mand.`);
         this.#setOrder(o => ({ ...o, skip: [...new Set([...o.skip, line.id])] }));
@@ -1073,7 +1079,7 @@ export class Weekmand {
    * veranderd is en het jonger is dan `maxAge` (voor wijzigingen in de Picnic-app zelf), anders
    * opnieuw berekenen. Gelijktijdige verzoeken wachten op dezelfde berekening.
    */
-  async currentPlan(maxAge = 10 * 60_000) {
+  async currentPlan(maxAge = PICNIC_READ_INTERVAL) {
     const cache = this.#planCache;
     const generation = this.#generation;
     if (cache && cache.generation === generation && this.now() - cache.at >= 0 && this.now() - cache.at < maxAge) return cache.plan;
@@ -1092,7 +1098,8 @@ export class Weekmand {
     const review = this.store.get<StoredReview | null>('review', null);
     check(review && review.id === id, 'Dit overzicht is niet meer actueel. Bereken de mand opnieuw.', 409);
     if (review.done) return { applied: {}, already: true, summary: 'De mand was al bijgewerkt.' };
-    check(this.now() - review.createdAt <= 30 * 60_000, 'Dit overzicht is ouder dan 30 minuten. Bereken de mand opnieuw.', 409);
+    // Vers lezen en vergelijken hieronder is de echte controle; dit vangt alleen hele oude overzichten.
+    check(this.now() - review.createdAt <= 2 * PICNIC_READ_INTERVAL, 'Dit overzicht is ouder dan een dag. Ververs het uit Picnic.', 409);
     const fresh = await this.plan();
     check(JSON.stringify(fresh.target) === JSON.stringify(review.plan.target) && fresh.cartId === review.plan.cartId,
       'De mand of het menu is intussen veranderd. Bekijk het nieuwe overzicht.', 409);
@@ -1112,7 +1119,7 @@ export class Weekmand {
   }
 
   /** De Picnic-mand zoals het voorstel hem ziet: dezelfde lezing, zodat lijst en voorstel kloppen. */
-  async cart(maxAge = 10 * 60_000) {
+  async cart(maxAge = PICNIC_READ_INTERVAL) {
     const shop = this.#requireShop();
     const { cart } = await this.#readCart(shop, maxAge);
     this.#rememberCartRecipes(cart);
