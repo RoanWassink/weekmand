@@ -177,6 +177,9 @@ async function withNewProduct(name, send) {
 let toastTimer;
 function toast(message, error = false) {
   const t = $('toast');
+  // Een open venster ligt boven de rest van de pagina; de melding moet daar dan in, anders zie je hem niet.
+  const host = $('dialog').open ? $('dialog') : document.body;
+  if (t.parentNode !== host) host.append(t);
   t.textContent = message;
   t.className = error ? 'error' : '';
   clearTimeout(toastTimer);
@@ -822,16 +825,30 @@ $('demo-checkout').onclick = () => {
 async function linkDialog(key) {
   const name = ingredientName(key);
   const results = el('div');
-  const input = el('input', { value: name, 'aria-label': 'Zoekterm' });
+  const status = el('p', { class: 'hint', role: 'status' });
+  const input = el('input', { value: name, 'aria-label': 'Zoekterm', enterkeyhint: 'search' });
   const search = async () => {
-    const products = await api('search', { query: input.value }).catch(e => { toast(e.message, true); return []; });
+    const query = input.value.trim();
+    if (!query) { status.textContent = 'Typ een zoekwoord.'; return; }
+    status.textContent = `Zoeken naar "${query}"…`;
+    status.className = 'hint';
+    put(results);
+    let products;
+    try {
+      products = await api('search', { query });
+    } catch (e) {
+      status.textContent = `Zoeken lukte niet: ${e.message}`;
+      status.className = 'hint warn';
+      return;
+    }
+    status.textContent = products.length ? '' : `Niets gevonden voor "${query}". ` + (/\s/.test(query) ? `Probeer één woord, bijvoorbeeld "${query.split(/\s+/)[0].toLowerCase()}".` : 'Probeer een ander woord.');
     const photos = products.some(p => p.image);
     put(results, ...products.map(p => el('button', { type: 'button', class: 'recipe-option product-option', onclick: () => run(async () => {
       await api('link', { name: key, productId: p.id }); closeDialog(); toast(`${name} gekoppeld aan ${p.name}.`); planStale = true;
     }) }, photos ? productPhoto(p.image) : null, el('span', { class: 'grow' }, el('b', {}, p.name),
       el('span', { class: 'muted small' }, [p.brand, p.unitQuantity, money(p.cents), p.unitPrice, p.available ? null : 'niet leverbaar'].filter(Boolean).join(' · '))))));
   };
-  dialog('Product voor ' + name, el('div', { class: 'stack' }, el('form', { class: 'row', onsubmit: e => { e.preventDefault(); search(); } }, input, el('button', {}, 'Zoek')), results));
+  dialog('Product voor ' + name, el('div', { class: 'stack' }, el('form', { class: 'row', onsubmit: e => { e.preventDefault(); search(); } }, input, el('button', {}, 'Zoek')), status, results));
   search();
 }
 
@@ -1355,14 +1372,15 @@ function renderAh() {
         ...(r.ignored ?? []).map(t => el('p', { class: 'small muted' }, `Overgeslagen (geen boodschap): ${t}`)))));
     }
     if (a.unmatched?.length) {
+      // De AI-knop staat bóven de regels, los van de invoervelden, zodat je hem niet raakt als je een veld aantikt.
       parts.push(el('h3', {}, 'Niet herkend'),
         el('p', { class: 'hint' }, 'Kies het product waar een bonregel bij hoort, of typ een nieuw product (bijvoorbeeld Efes voor EFES SUCUK). Negeer wat geen boodschap is, zoals keukenrol. Weekmand telt de regel dan alsnog bij de voorraad en onthoudt het voor volgende bonnen.'),
-        ...a.unmatched.map(receiptMapRow),
-        S.ai ? btn('Laat de AI zoeken', () => run(async () => {
+        S.ai ? el('div', { class: 'row ai-match' }, btn('Laat de AI alles zoeken', () => run(async () => {
           const r = await api('ah/match', {});
           toast(r.matched.length ? `De AI heeft ${r.matched.length} ${r.matched.length === 1 ? 'regel' : 'regels'} gekoppeld${r.unknown.length ? `; ${r.unknown.length} bleef onbekend` : ''}.` : 'De AI herkende geen van deze regels.');
           planStale = true;
-        }), 'small secondary') : el('p', { class: 'hint' }, 'Met een gekoppelde AI (Meer → AI-aanbieder) zoekt Weekmand deze regels zelf op.'));
+        }), 'small secondary')) : el('p', { class: 'hint' }, 'Met een gekoppelde AI (Meer → AI-aanbieder) zoekt Weekmand deze regels zelf op.'),
+        el('div', { class: 'map-list' }, ...a.unmatched.map(receiptMapRow)));
     }
     parts.push(el('div', { class: 'row' },
       btn('Kassabonnen ophalen', fetchReceipts, 'small'),

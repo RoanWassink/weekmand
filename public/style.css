@@ -323,6 +323,8 @@ ol.steps li::marker { color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .map-row .map-name { font-weight: 600; overflow-wrap: anywhere; }
 .map-row .map-controls { display: flex; gap: var(--s2); align-items: center; }
 .map-row .map-controls .picker { flex: 1; }
+.ai-match { margin-bottom: var(--s3); }
+.map-list { margin-bottom: var(--s5); }
 /* Suggesties onder een productveld (vervangt de datalist, die op telefoons vaak niets toont). */
 .picker { position: relative; display: block; min-width: 0; }
 .add-row .picker { flex: 1; }
