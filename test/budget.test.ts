@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AlbertHeijn } from '../src/ah.ts';
 import { Weekmand } from '../src/app.ts';
+import type { SharedProducts } from '../src/app.ts';
 import { Assistant } from '../src/assistant.ts';
 import { matchDiscounts, periodRange, priceChanges, summarize, toCsv } from '../src/budget.ts';
 import type { Spend } from '../src/budget.ts';
@@ -111,7 +112,7 @@ test('duurder geworden: alleen dezelfde verpakking telt', () => {
 });
 
 /** Nep-Picnic met bezorgingen en nep-AH met bonnen: alleen wat het budget gebruikt. */
-function setup() {
+function setup(shared: SharedProducts = { ahSizes: {}, labels: {} }) {
   const clock = { now: tuesday };
   const secrets = new Secrets(null);
   secrets.set('picnicAuthKey', 'k');
@@ -162,7 +163,7 @@ function setup() {
   }) as unknown as typeof fetch;
   secrets.set('ah', { accessToken: 'a', refreshToken: 'r', expiresAt: tuesday + 36e5, linkedAt: '2026-11-01T00:00:00Z' });
   const ah = new AlbertHeijn(secrets, fetcher, () => clock.now);
-  const app = new Weekmand({ store: new Store(':memory:'), secrets, picnic, ah, now: () => clock.now });
+  const app = new Weekmand({ store: new Store(':memory:'), secrets, picnic, ah, now: () => clock.now, shared });
   app.searchPause = 0;
   return { app, clock, calls };
 }
@@ -186,6 +187,21 @@ test('budget: verpakkingen van Picnic en AH, elk AH-product één keer opgezocht
   await app.syncSpending();
   assert.equal(calls.filter(c => c === 'ah omzetten').length, 2);
   assert.equal(calls.filter(c => c === 'ah maten').length, 1, 'zonder webwinkelproduct geen tweede verzoek');
+});
+
+test('budget: meegeleverde productkennis scheelt verzoeken aan AH en de AI; eigen keuze gaat voor', async () => {
+  const { app, calls } = setup({ ahSizes: { 111: '6 x 33 cl' }, labels: { 'raar product': { category: 'huishouden', kind: 'geen-eten' } } });
+  await app.syncSpending({ details: 4 });
+  assert.ok(!(app.store.get('ahSizes', {}) as Record<string, unknown>)[111], '111 niet opgezocht');
+  assert.equal(calls.filter(c => c === 'ah maten').length, 0, 'alleen 222 bleef over, en die kent AH niet');
+  const asked: string[][] = [];
+  app.productClassifier = async names => { asked.push(names); return names.map(name => ({ name, category: 'snacks', kind: 'extra' })); };
+  await app.labelProducts();
+  assert.ok(!asked.flat().includes('RAAR PRODUCT'), 'bekende naam niet aan de AI gevraagd');
+  const month = app.budgetOverview({ period: 'month' });
+  assert.equal(month.products.find(p => p.name === 'RAAR PRODUCT')!.by, 'gedeeld');
+  app.setProductLabel({ name: 'raar product', category: 'snacks' });
+  assert.equal(app.budgetOverview({ period: 'month' }).products.find(p => p.name === 'RAAR PRODUCT')!.category, 'snacks');
 });
 
 test('budget: totalen in één keer, regels rustig aan, overzicht per maand', async () => {
@@ -258,7 +274,7 @@ test('budget: seintje bij 80% en 100% van een zelf ingesteld maandbudget en bij 
 });
 
 test('telegram: antwoorden op een wijziging gaan ook naar de andere gekoppelde chats', async t => {
-  const app = new Weekmand({ store: new Store(':memory:'), secrets: new Secrets(null), now: () => tuesday });
+  const app = new Weekmand({ store: new Store(':memory:'), secrets: new Secrets(null), now: () => tuesday, shared: { ahSizes: {}, labels: {} } });
   const sent: { chat: number; text: string }[] = [];
   let updates = [{ update_id: 1, message: { chat: { id: 1 }, from: { first_name: 'Roan' }, text: 'melk is op' } }];
   t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {

@@ -37,7 +37,8 @@ export type ReceiptPhoto = {
 
 export type SpendKind = 'nodig' | 'extra' | 'geen-eten';
 export type BudgetCategory = 'groente-fruit' | 'vlees-vis' | 'zuivel' | 'brood' | 'voorraadkast' | 'diepvries' | 'drinken' | 'alcohol' | 'snacks' | 'huishouden' | 'overig';
-export type ProductLabel = { category: BudgetCategory; kind: SpendKind; by: 'regel' | 'catalogus' | 'ai' | 'user' };
+/** by 'gedeeld': uit de productkennis die met Weekmand meekomt (src/data/products.json). */
+export type ProductLabel = { category: BudgetCategory; kind: SpendKind; by: 'regel' | 'catalogus' | 'ai' | 'user' | 'gedeeld' };
 
 export const budgetCategories: { key: BudgetCategory; label: string; kind: SpendKind }[] = [
   { key: 'groente-fruit', label: 'Groente en fruit', kind: 'nodig' },

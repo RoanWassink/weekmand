@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { Catalog, normalize, slug } from './catalog.ts';
 import type { Feedback, ProductLink, Store } from './db.ts';
 import { check, Problem } from './errors.ts';
@@ -67,6 +68,18 @@ export function baseName(name: string) {
  * dag vanzelf. "Ververs uit Picnic" en doorvoeren lezen altijd vers.
  */
 export const PICNIC_READ_INTERVAL = 12 * 36e5;
+/**
+ * Productkennis die met Weekmand meekomt (scripts/export-products.mjs): AH-verpakkingen per
+ * kassa-id en de indeling van productnamen. Scheelt andere installaties verzoeken aan AH en de AI.
+ * Eigen gegevens gaan altijd voor.
+ */
+export type SharedProducts = { ahSizes: Record<string, string>; labels: Record<string, { category: BudgetCategory; kind: SpendKind }> };
+function loadSharedProducts(): SharedProducts {
+  try {
+    const data = JSON.parse(readFileSync(new URL('./data/products.json', import.meta.url), 'utf8'));
+    return { ahSizes: data?.ahSizes ?? {}, labels: data?.labels ?? {} };
+  } catch { return { ahSizes: {}, labels: {} }; }
+}
 /** Zoveel oudere aankopen per bron en per ronde krijgen alsnog hun verpakkingen (zie syncSpending). */
 const SIZE_BACKFILL = 4;
 
@@ -103,8 +116,11 @@ export class Weekmand {
   /** Pauze tussen automatische Picnic-zoekopdrachten (ms). */
   searchPause = 1500;
 
-  constructor(options: { store: Store; secrets: Secrets; picnic?: PicnicShop; ah?: AlbertHeijn; now?: () => number }) {
+  readonly shared: SharedProducts;
+
+  constructor(options: { store: Store; secrets: Secrets; picnic?: PicnicShop; ah?: AlbertHeijn; now?: () => number; shared?: SharedProducts }) {
     this.store = options.store;
+    this.shared = options.shared ?? loadSharedProducts();
     this.secrets = options.secrets;
     this.now = options.now ?? Date.now;
     this.catalog = new Catalog(this.store);
@@ -1515,7 +1531,7 @@ export class Weekmand {
     return this.budgetSettings();
   }
 
-  /** Hoe een product meetelt: eigen keuze, dan de AI, dan vaste regels, dan de catalogus. */
+  /** Hoe een product meetelt: eigen keuze, dan de AI, dan de meegeleverde indeling, dan vaste regels, dan de catalogus. */
   #labeler() {
     const saved = this.store.get<Record<string, ProductLabel>>('productLabels', {});
     const aliases = this.store.get<Record<string, ReceiptAlias>>('receiptAliases', {});
@@ -1523,7 +1539,8 @@ export class Weekmand {
     return (name: string): ProductLabel | null => {
       const key = labelKey(name);
       if (memo.has(key)) return memo.get(key)!;
-      let label: ProductLabel | null = saved[key] ?? null;
+      const shared = this.shared.labels[key];
+      let label: ProductLabel | null = saved[key] ?? (shared && categoryKeys.includes(shared.category) && kindKeys.includes(shared.kind) ? { ...shared, by: 'gedeeld' } : null);
       const rule = label ? null : ruleCategory(name);
       if (rule) label = { category: rule, kind: kindOf(rule), by: 'regel' };
       if (!label) {
@@ -1563,7 +1580,8 @@ export class Weekmand {
       const open = (v: { detailed: boolean; discounts: boolean }) => !v.detailed || (source === 'ah' && !v.discounts);
       return [
         ...all.filter(([, v]) => open(v)).slice(0, n),
-        ...all.filter(([, v]) => !open(v) && !v.sized && v.date >= yearAgo).slice(0, SIZE_BACKFILL),
+        // AH: een bon ophalen is één licht verzoek; Picnic rustiger.
+        ...all.filter(([, v]) => !open(v) && !v.sized && v.date >= yearAgo).slice(0, source === 'ah' ? Math.max(SIZE_BACKFILL, n) : SIZE_BACKFILL),
       ];
     };
     if (this.picnic.ready()) {
@@ -1642,7 +1660,7 @@ export class Weekmand {
       if (s.source !== 'ah') continue;
       for (const l of s.lines ?? []) {
         const k = l.productId && known[l.productId];
-        if (l.productId && (!k || (k.pack === null && this.now() - k.at > 30 * day))) wanted.add(l.productId);
+        if (l.productId && !this.shared.ahSizes[l.productId] && (!k || (k.pack === null && this.now() - k.at > 30 * day))) wanted.add(l.productId);
       }
     }
     if (!wanted.size) return;
@@ -1657,7 +1675,7 @@ export class Weekmand {
   /** De verpakking van een bonregel: van Picnic meegegeven, of voor AH opgezocht via het product-id. */
   #packOf() {
     const ah = this.store.get<Record<string, { pack: string | null }>>('ahSizes', {});
-    return (l: SpendLine) => l.pack ?? (l.productId ? ah[l.productId]?.pack : null);
+    return (l: SpendLine) => l.pack ?? (l.productId ? ah[l.productId]?.pack ?? this.shared.ahSizes[l.productId] : null);
   }
 
   /** Een AH-bon in het uitgavenboek; de bonusregels worden op naam aan de producten gekoppeld. */
