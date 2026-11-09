@@ -3,8 +3,9 @@ import type { Secrets } from './secrets.ts';
 
 /**
  * Albert Heijn voor boodschappen in de winkel, met het eigen AH-account van het huishouden.
- * Weekmand doet hier precies twee dingen: boodschappen op "Mijn lijst" zetten (zichtbaar in de
- * AH-app en de zelfscanner) en kassabonnen lezen. Geen mand, geen bestellingen, geen zoekopdrachten.
+ * Weekmand doet hier precies drie dingen: boodschappen op "Mijn lijst" zetten (zichtbaar in de
+ * AH-app en de zelfscanner), kassabonnen lezen, en de verpakkingsmaat opzoeken van producten
+ * die op een bon staan (één keer per product). Geen mand, geen bestellingen, geen vrij zoeken.
  *
  * AH heeft geen openbare API. Dit is de API van de AH-app, zoals community-projecten die
  * beschrijven (o.a. MealieShopper, appie-go). Weekmand stuurt een eerlijke User-Agent; de
@@ -24,7 +25,8 @@ const HEADERS = {
 export type AhLink = { accessToken: string; refreshToken: string; expiresAt: number; linkedAt: string };
 export type AhListItem = { description: string; quantity: number; struck: boolean };
 export type AhReceipt = { id: string; dateTime: string; total: number | null };
-export type AhReceiptLine = { name: string; quantity: number; amount: number | null };
+/** productId: het kassa-id van het product (niet het id van de webwinkel). */
+export type AhReceiptLine = { name: string; quantity: number; amount: number | null; productId?: string };
 /** Een bonusregel onderaan de bon ("BONUS AHRUNDERGEHA -0,40"): naam en bedrag, zonder product erbij. */
 export type AhDiscount = { name: string; amount: number };
 
@@ -133,9 +135,34 @@ export class AlbertHeijn {
     const lines: any[] = Array.isArray(d.products) ? d.products : [];
     const discounts: any[] = Array.isArray(d.discounts) ? d.discounts : [];
     return {
-      lines: lines.filter(l => l?.name).map(l => ({ name: String(l.name).trim(), quantity: Number(l.quantity) || 0, amount: money(l.amount) })),
+      lines: lines.filter(l => l?.name).map(l => ({
+        name: String(l.name).trim(), quantity: Number(l.quantity) || 0, amount: money(l.amount),
+        ...(Number.isSafeInteger(Number(l.id)) && Number(l.id) > 0 ? { productId: String(Number(l.id)) } : {}),
+      })),
       discounts: withDiscounts ? discounts.filter(k => k?.name).map(k => ({ name: String(k.name).trim(), amount: money(k.amount) ?? 0 })) : null,
     };
+  }
+
+  /**
+   * Verpakkingsmaat ("300 g") van producten op de bon. Het id op de bon is een kassa-id; AH zet
+   * dat om naar het product in de webwinkel, en dat product kent zijn maat. Twee verzoeken voor
+   * de hele lijst. Een product dat AH niet (meer) kent, komt terug als null.
+   */
+  async productSizes(posIds: string[]): Promise<Map<string, string | null>> {
+    const ids = [...new Set(posIds.map(Number).filter(n => Number.isSafeInteger(n) && n > 0))].slice(0, 25);
+    const result = new Map<string, string | null>(ids.map(id => [String(id), null]));
+    if (!ids.length) return result;
+    const converted = await this.#graphqlPartial(`query Producten { ${ids.map((id, i) => `p${i}: productConvertId(sourceId: ${id})`).join(' ')} }`);
+    const webshop = new Map<number, string>();
+    ids.forEach((id, i) => { const w = Number(converted[`p${i}`]); if (Number.isSafeInteger(w) && w > 0) webshop.set(w, String(id)); });
+    if (!webshop.size) return result;
+    const list = [...webshop.keys()];
+    const details = await this.#graphqlPartial(`query Maten { ${list.map((w, i) => `p${i}: product(id: ${w}) { id salesUnitSize }`).join(' ')} }`);
+    list.forEach((w, i) => {
+      const size = details[`p${i}`]?.salesUnitSize;
+      if (typeof size === 'string' && size.trim()) result.set(webshop.get(w)!, size.trim().slice(0, 60));
+    });
+    return result;
   }
 
   // ───────────── Intern ─────────────
@@ -203,6 +230,13 @@ export class AlbertHeijn {
       if (!res.ok) throw failure(res.status);
       return res.status === 204 ? null : res.json().catch(() => null);
     }
+  }
+
+  /** GraphQL waarbij losse onderdelen mogen ontbreken (een onbekend product); alleen helemaal niets is een fout. */
+  async #graphqlPartial(query: string): Promise<Record<string, any>> {
+    const data = await this.#call('POST', '/graphql', { query, variables: {} });
+    if (!data?.data) throw new Problem(502, 'AH gaf een fout bij het opzoeken van de verpakkingen.');
+    return data.data;
   }
 
   async #graphql(query: string, variables: Record<string, unknown>) {

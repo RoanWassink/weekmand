@@ -1636,8 +1636,8 @@ function renderBudget() {
 
   if (b.priceChanges.length) {
     parts.push(el('section', { class: 'card' }, el('h3', {}, 'Duurder geworden'),
-      el('p', { class: 'hint' }, 'Prijs per stuk bij de laatste aankoop, tegenover de eerste in het jaar ervoor.'),
-      b.priceChanges.map(p => el('div', { class: 'prod-row' }, el('span', { class: 'grow' }, p.name, el('span', { class: 'muted small' }, ` · ${money(p.from.unit)} → ${money(p.to.unit)}`)),
+      el('p', { class: 'hint' }, 'Prijs per stuk bij de laatste aankoop, tegenover de eerste in het jaar ervoor, steeds voor dezelfde verpakking.'),
+      b.priceChanges.map(p => el('div', { class: 'prod-row' }, el('span', { class: 'grow' }, p.name, el('span', { class: 'muted small' }, `${p.pack ? ` · ${p.pack}` : ''} · ${money(p.from.unit)} → ${money(p.to.unit)}`)),
         el('span', { class: 'pill op' }, `+${p.percent}%`)))));
   }
 

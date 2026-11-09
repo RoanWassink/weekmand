@@ -2,9 +2,14 @@
 // per week, maand en jaar, per categorie en per soort (nodig, extra, geen eten).
 import type { Category } from './types.ts';
 import { addDays, isoWeek, weekday } from './time.ts';
+import { parseUnitQuantity } from './units.ts';
 
 export type SpendSource = 'picnic' | 'ah' | 'manual';
-export type SpendLine = { name: string; quantity: number; cents: number };
+/**
+ * Eén regel van een aankoop. `pack` is de verpakking zoals de winkel die noemt ("300 gram");
+ * `productId` het AH-product van een bonregel, waarmee Weekmand de maat opzoekt.
+ */
+export type SpendLine = { name: string; quantity: number; cents: number; pack?: string; productId?: string };
 /**
  * Eén aankoop. `lines` ontbreekt zolang de regels nog niet opgehaald zijn: het totaal telt dan
  * al wel mee, de uitsplitsing nog niet.
@@ -14,6 +19,8 @@ export type Spend = {
   lines?: SpendLine[]; savingsCents?: number; shop?: string; note?: string; category?: BudgetCategory;
   /** Niet meetellen (bijv. een cadeau of iets voor het werk). */
   excluded?: boolean;
+  /** De regels hebben hun verpakking (Picnic) of AH-product-id; oudere aankopen worden rustig bijgewerkt. */
+  sized?: boolean;
   /**
    * Bonusregels van een AH-bon (negatief bedrag), met de productregel waar ze bij horen (index in
    * `lines`, of null als Weekmand dat niet kon bepalen). Ontbreekt bij bonnen van vóór deze indeling.
@@ -232,25 +239,44 @@ export function summarize(spends: Spend[], label: (name: string) => ProductLabel
   };
 }
 
+/** Verpakkingsmaat als vergelijkbare sleutel: '300 gram' → 'g300', '1 kg' → 'g1000', '6 x 33 cl' → 'ml1980'. */
+export function packKey(pack?: string | null): string | null {
+  if (!pack) return null;
+  const m = parseUnitQuantity(pack);
+  const unit = m.g !== undefined ? 'g' : m.ml !== undefined ? 'ml' : m.st !== undefined ? 'st' : null;
+  return unit && m[unit]! > 0 ? unit + Math.round(m[unit]!) : null;
+}
+
+/** Zonder bekende maat: wie ineens zoveel meer of minder betaalt, kocht vrijwel zeker een andere verpakking. */
+const OTHER_PACK = 1.6;
+
 /**
  * Producten die duurder werden: de stuksprijs van de laatste aankoop tegenover de eerste in
- * de gegeven aankopen (minstens 10% en 10 cent erbij).
+ * de gegeven aankopen (minstens 10% en 10 cent erbij), steeds voor dezelfde verpakking. Is de
+ * maat bekend, dan telt alleen dezelfde maat. Anders ziet een sprong van 60% of meer eruit als
+ * een andere verpakking (300 g of 1 kg rundergehakt onder één naam) en wordt die apart gevolgd.
  */
-export function priceChanges(spends: Spend[]) {
-  const seen = new Map<string, { name: string; first: { date: string; unit: number }; last: { date: string; unit: number } }>();
+export function priceChanges(spends: Spend[], packOf: (line: SpendLine) => string | null | undefined = l => l.pack) {
+  type Track = { name: string; pack: string | null; first: { date: string; unit: number }; last: { date: string; unit: number } };
+  const seen = new Map<string, Track[]>();
   for (const s of [...spends].sort((a, b) => a.date.localeCompare(b.date))) {
     for (const l of s.lines ?? []) {
       if (l.cents <= 0 || l.quantity <= 0 || adjustmentLine.test(l.name)) continue;
       const unit = Math.round(l.cents / l.quantity);
-      const key = labelKey(l.name);
-      const p = seen.get(key);
-      if (!p) seen.set(key, { name: l.name, first: { date: s.date, unit }, last: { date: s.date, unit } });
-      else p.last = { date: s.date, unit };
+      const pack = packOf(l) || null;
+      const size = packKey(pack);
+      const key = labelKey(l.name) + (size ? '|' + size : '');
+      const tracks = seen.get(key) ?? [];
+      seen.set(key, tracks);
+      const ratio = (t: Track) => Math.max(t.last.unit / unit, unit / t.last.unit);
+      const track = size ? tracks[0] : tracks.filter(t => ratio(t) < OTHER_PACK).sort((a, b) => ratio(a) - ratio(b))[0];
+      if (track) { track.last = { date: s.date, unit }; track.pack = pack ?? track.pack; }
+      else tracks.push({ name: l.name, pack, first: { date: s.date, unit }, last: { date: s.date, unit } });
     }
   }
-  return [...seen.values()]
+  return [...seen.values()].flat()
     .filter(p => p.last.date > p.first.date && p.last.unit - p.first.unit >= 10 && p.last.unit >= p.first.unit * 1.1)
-    .map(p => ({ name: p.name, from: p.first, to: p.last, percent: Math.round((p.last.unit / p.first.unit - 1) * 100) }))
+    .map(p => ({ name: p.name, pack: p.pack, from: p.first, to: p.last, percent: Math.round((p.last.unit / p.first.unit - 1) * 100) }))
     .sort((a, b) => b.percent - a.percent);
 }
 
