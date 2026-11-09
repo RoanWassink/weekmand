@@ -497,3 +497,10 @@ button.prod-row:hover { background: color-mix(in oklch, var(--surface-2) 70%, tr
 .product-photo .photo { width: min(100%, 240px); aspect-ratio: 1; object-fit: contain; }
 .product-about { margin: 0; line-height: 1.5; }
 .product-sheet > :empty { display: none; }
+.ai-provider { display: grid; gap: var(--s2); padding: var(--s3); border: 1px solid var(--line); border-radius: 12px; }
+.ai-provider.active { border-color: var(--brand); }
+.ai-provider select { min-height: 44px; }
+#ai-usage { margin-top: var(--s4); }
+#ai-usage h4 { margin: 0; }
+.usage-row { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) 0; border-top: 1px solid var(--line); }
+.usage-row .grow { display: grid; min-width: 0; overflow-wrap: anywhere; }

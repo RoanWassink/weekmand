@@ -1,5 +1,5 @@
-import { converse, labelOf, modelOf, providers, testConnection, visionModels } from './ai.ts';
-import type { AIConfig, ImageInput, Provider } from './ai.ts';
+import { converse, defaultPrices, labelOf, listModels, modelOf, onUsage, providers, testConnection, visionModels } from './ai.ts';
+import type { AIConfig, ImageInput, Provider, Usage } from './ai.ts';
 import type { AdaptedRecipe, ReceiptMatch, RecipeAdapter, Weekmand } from './app.ts';
 import { budgetCategories, categoryKeys, kindKeys } from './budget.ts';
 import type { BudgetCategory, ReceiptPhoto, SpendKind } from './budget.ts';
@@ -32,49 +32,185 @@ export type ChatResult = { reply: string; reviewId?: string; ai: boolean };
 /** Getypte goedkeuring ("naar picnic sturen", "stuur maar", "verstuur"), na normalize(). */
 const sendPhrase = /^(ja |ok |oke |prima )?(naar picnic( sturen| versturen)?|(stuur|verstuur)( het| alles| de mand| de wijzigingen)?( maar)?( door| naar picnic)?|doorvoeren|mand (versturen|doorvoeren))$/;
 
+type Entry = { key: string; model?: string; baseUrl?: string };
+type Linked = { entries: Partial<Record<Provider, Entry>>; active?: Provider };
+/** Verbruik per maand ('2026-11') en per aanbieder|model. */
+type UsageLog = Record<string, Record<string, { calls: number; input: number; output: number; cached: number }>>;
+const modelId = /^[a-z0-9._:/-]{1,128}$/i;
+
 export class Assistant {
   #app: Weekmand;
-  #session: AIConfig | null = null;
+  /** Koppelingen zonder "onthouden": alleen tot de volgende herstart. */
+  #session: Linked = { entries: {} };
 
-  constructor(app: Weekmand) { this.#app = app; }
+  constructor(app: Weekmand) {
+    this.#app = app;
+    // Oude vorm (één aanbieder) omzetten; de sleutel blijft dezelfde.
+    const old = app.secrets.get('ai');
+    if (old && old.provider in providers) {
+      app.secrets.set('aiProviders', { ...app.secrets.get('aiProviders'), [old.provider]: { key: old.key, ...(old.model ? { model: old.model } : {}), ...(old.baseUrl ? { baseUrl: old.baseUrl } : {}) } });
+      app.secrets.set('aiActive', old.provider);
+      app.secrets.set('ai', undefined);
+    }
+    onUsage(usage => this.#record(usage));
+  }
 
-  /** Actieve koppeling: in deze sessie ingesteld, opgeslagen, of uit de serverconfiguratie. */
-  config(): { config: AIConfig; source: 'sessie' | 'opgeslagen' | 'server' } | null {
-    if (this.#session) return { config: this.#session, source: 'sessie' };
-    const saved = this.#app.secrets.get('ai');
-    if (saved && saved.provider in providers) return { config: saved as AIConfig, source: 'opgeslagen' };
+  #saved(): Linked {
+    const entries: Partial<Record<Provider, Entry>> = {};
+    for (const [p, e] of Object.entries(this.#app.secrets.get('aiProviders') ?? {})) if (p in providers && e) entries[p as Provider] = e;
+    const active = this.#app.secrets.get('aiActive');
+    return { entries, ...(active && active in entries ? { active: active as Provider } : {}) };
+  }
+
+  /** De koppeling van één aanbieder (eerst deze sessie, dan opgeslagen). */
+  #entry(provider: Provider): { entry: Entry; source: 'sessie' | 'opgeslagen' } | null {
+    const session = this.#session.entries[provider];
+    if (session) return { entry: session, source: 'sessie' };
+    const saved = this.#saved().entries[provider];
+    return saved ? { entry: saved, source: 'opgeslagen' } : null;
+  }
+
+  #server(): AIConfig | null {
     const provider = (process.env.AI_PROVIDER || (process.env.OPENAI_API_KEY ? 'openai' : '')) as Provider;
     const key = process.env.AI_API_KEY || process.env.OPENAI_API_KEY || '';
-    if (provider && provider in providers && (key || provider === 'local')) {
-      return { config: { provider, key, model: process.env.AI_MODEL || process.env.OPENAI_MODEL || undefined, baseUrl: process.env.AI_BASE_URL || undefined }, source: 'server' };
+    if (!provider || !(provider in providers) || (!key && provider !== 'local')) return null;
+    return { provider, key, model: process.env.AI_MODEL || process.env.OPENAI_MODEL || undefined, baseUrl: process.env.AI_BASE_URL || undefined };
+  }
+
+  /** Actieve koppeling: in deze sessie gekozen, opgeslagen, of uit de serverconfiguratie. */
+  config(): { config: AIConfig; source: 'sessie' | 'opgeslagen' | 'server' } | null {
+    for (const active of [this.#session.active, this.#saved().active]) {
+      const found = active ? this.#entry(active) : null;
+      if (active && found) return { config: { provider: active, ...found.entry }, source: found.source };
     }
-    return null;
+    const server = this.#server();
+    return server ? { config: server, source: 'server' } : null;
   }
 
   status() {
     const active = this.config();
-    return active ? { provider: active.config.provider, label: labelOf(active.config), model: modelOf(active.config), source: active.source } : null;
+    if (!active) return null;
+    const providersLinked = (Object.keys(providers) as Provider[]).flatMap(provider => {
+      const found = this.#entry(provider);
+      if (!found) return [];
+      const config: AIConfig = { provider, ...found.entry };
+      // Alleen de laatste vier tekens: genoeg om te zien welke sleutel het is.
+      return [{ provider, label: labelOf(config), model: modelOf(config), keyHint: found.entry.key ? '…' + found.entry.key.slice(-4) : '', source: found.source, active: active.source !== 'server' && active.config.provider === provider }];
+    });
+    return { provider: active.config.provider, label: labelOf(active.config), model: modelOf(active.config), source: active.source, providers: providersLinked };
   }
 
+  /** Koppelen of de sleutel vervangen. Zonder nieuwe sleutel blijft de bewaarde staan. */
   async connect(input: { provider: string; key?: string; model?: string; baseUrl?: string; remember?: boolean }) {
     check(typeof input.provider === 'string' && input.provider in providers, 'Kies een bekende AI-aanbieder.');
     const provider = input.provider as Provider;
-    const key = (input.key ?? '').trim();
+    const existing = this.#entry(provider)?.entry;
+    const key = (input.key ?? '').trim() || existing?.key || '';
     check(provider === 'local' || /^[!-~]{8,2048}$/.test(key), 'Vul een geldige API-sleutel in.');
-    const model = (input.model ?? '').trim();
-    check(!model || /^[a-z0-9._:/-]{1,128}$/i.test(model), 'Vul een geldig model-ID in of laat het veld leeg.');
-    const baseUrl = (input.baseUrl ?? '').trim();
+    const model = (input.model ?? '').trim() || existing?.model || '';
+    check(!model || modelId.test(model), 'Vul een geldig model-ID in of laat het veld leeg.');
+    const baseUrl = (input.baseUrl ?? '').trim() || existing?.baseUrl || '';
     if (provider === 'local') check(/^https?:\/\/[^\s]{3,200}$/.test(baseUrl), 'Vul het adres van je lokale model in, bijv. http://192.168.1.20:11434/v1.');
-    const config: AIConfig = { provider, key, ...(model ? { model } : {}), ...(baseUrl ? { baseUrl } : {}) };
-    await testConnection(config);
-    this.#session = config;
-    this.#app.secrets.set('ai', input.remember ? config : undefined);
+    const entry: Entry = { key, ...(model ? { model } : {}), ...(baseUrl ? { baseUrl } : {}) };
+    await testConnection({ provider, ...entry });
+    this.#store(provider, entry, input.remember !== false);
     return this.status();
   }
 
-  disconnect() {
-    this.#session = null;
-    this.#app.secrets.set('ai', undefined);
+  #store(provider: Provider, entry: Entry, remember: boolean) {
+    if (remember) {
+      delete this.#session.entries[provider];
+      this.#app.secrets.set('aiProviders', { ...this.#app.secrets.get('aiProviders'), [provider]: entry });
+      this.#app.secrets.set('aiActive', provider);
+      this.#session.active = undefined;
+    } else {
+      this.#session.entries[provider] = entry;
+      this.#session.active = provider;
+    }
+  }
+
+  /** Wisselen van aanbieder of model, met de bewaarde sleutel. Een ander model wordt eerst kort getest. */
+  async use(input: { provider: string; model?: string }) {
+    const provider = input.provider as Provider;
+    const found = provider in providers ? this.#entry(provider) : null;
+    check(found, 'Deze aanbieder is niet gekoppeld.', 404);
+    const model = (input.model ?? '').trim();
+    check(!model || modelId.test(model), 'Kies een geldig model.');
+    const entry: Entry = { ...found.entry };
+    if (model && model !== modelOf({ provider, ...found.entry })) {
+      entry.model = model;
+      await testConnection({ provider, ...entry });
+    }
+    this.#store(provider, entry, found.source === 'opgeslagen');
+    return this.status();
+  }
+
+  async models(provider: string) {
+    const found = provider in providers ? this.#entry(provider as Provider) : null;
+    check(found, 'Deze aanbieder is niet gekoppeld.', 404);
+    return { models: await listModels({ provider: provider as Provider, ...found.entry }) };
+  }
+
+  /** Eén aanbieder ontkoppelen (zonder aanbieder: allemaal). */
+  disconnect(provider?: string) {
+    const all = !provider;
+    const saved = { ...this.#app.secrets.get('aiProviders') };
+    for (const p of Object.keys(providers) as Provider[]) {
+      if (!all && p !== provider) continue;
+      delete this.#session.entries[p];
+      delete saved[p];
+      if (this.#session.active === p) this.#session.active = undefined;
+    }
+    this.#app.secrets.set('aiProviders', Object.keys(saved).length ? saved : undefined);
+    const active = this.#app.secrets.get('aiActive');
+    if (active && !(active in saved)) this.#app.secrets.set('aiActive', Object.keys(saved)[0]);
+  }
+
+  // ───────────── Verbruik en kosten ─────────────
+
+  #record(u: Usage) {
+    const month = new Date(this.#app.now()).toISOString().slice(0, 7);
+    this.#app.store.update<UsageLog>('aiUsage', {}, log => {
+      const row = (log[month] ??= {})[`${u.provider}|${u.model}`] ??= { calls: 0, input: 0, output: 0, cached: 0 };
+      row.calls++; row.input += u.input; row.output += u.output; row.cached += u.cached;
+      // Hooguit dertien maanden bewaren.
+      for (const m of Object.keys(log).sort().slice(0, -13)) delete log[m];
+      return log;
+    });
+  }
+
+  #price(model: string) {
+    const own = this.#app.store.get<Record<string, { in: number; out: number }>>('aiPrices', {})[model];
+    if (own) return { ...own, own: true };
+    const known = defaultPrices.find(p => p.match.test(model));
+    return known ? { in: known.in, out: known.out, own: false } : null;
+  }
+
+  /** Tokens en geschatte kosten (dollar) per aanbieder en model, per maand, nieuwste eerst. */
+  usage() {
+    const log = this.#app.store.get<UsageLog>('aiUsage', {});
+    const months = Object.keys(log).sort().reverse().map(month => {
+      const rows = Object.entries(log[month]).map(([id, r]) => {
+        const [provider, ...rest] = id.split('|');
+        const model = rest.join('|');
+        const price = this.#price(model);
+        const cost = price ? ((r.input - r.cached) * price.in + r.cached * price.in / 10 + r.output * price.out) / 1e6 : null;
+        return { provider, label: providers[provider as Provider]?.label ?? provider, model, ...r, price, cost };
+      }).sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0) || b.calls - a.calls);
+      return { month, rows, cost: rows.reduce((n, r) => n + (r.cost ?? 0), 0), unpriced: rows.some(r => r.cost === null) };
+    });
+    return { months };
+  }
+
+  /** Eigen prijs (dollar per miljoen tokens) voor een model; null zet de schatting terug. */
+  setPrice(model: string, price: { in: number; out: number } | null) {
+    check(modelId.test(model), 'Onbekend model.');
+    if (price) check([price.in, price.out].every(n => Number.isFinite(n) && n >= 0 && n <= 1000), 'Vul prijzen tussen 0 en 1000 dollar per miljoen tokens in.');
+    this.#app.store.update<Record<string, { in: number; out: number }>>('aiPrices', {}, prices => {
+      if (price) prices[model] = { in: price.in, out: price.out }; else delete prices[model];
+      return prices;
+    });
+    return this.usage();
   }
 
   /**

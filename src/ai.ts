@@ -28,6 +28,17 @@ export type ImageInput = { mediaType: 'image/jpeg' | 'image/png' | 'image/webp';
 type ConverseInput = { system: string; context: string; history: Turn[]; message: string; tools: ToolSpec[]; run: Runner; maxSteps?: number; maxTokens?: number; images?: ImageInput[]; model?: string };
 
 export const modelOf = (c: AIConfig) => c.model?.trim() || providers[c.provider].model;
+
+/** Tokens van één antwoord; `cached` is het deel van de invoer dat uit de cache van de aanbieder kwam. */
+export type Usage = { provider: Provider; model: string; input: number; output: number; cached: number };
+let usageSink: ((usage: Usage) => void) | null = null;
+/** Elk antwoord met tokens meldt zich hier (voor het kostenoverzicht). */
+export function onUsage(fn: ((usage: Usage) => void) | null) { usageSink = fn; }
+const count = (n: unknown) => Number.isFinite(Number(n)) && Number(n) > 0 ? Math.round(Number(n)) : 0;
+function report(provider: Provider, model: string, input: number, output: number, cached: number) {
+  if (!input && !output) return;
+  try { usageSink?.({ provider, model, input, output, cached: Math.min(cached, input) }); } catch { /* meten mag het antwoord nooit breken */ }
+}
 export const labelOf = (c: AIConfig) => providers[c.provider].label;
 
 function apiProblem(status: number | undefined, label: string): Problem {
@@ -84,6 +95,9 @@ async function claude(config: AIConfig, input: ConverseInput): Promise<string> {
       if (error instanceof Anthropic.APIError) throw apiProblem(error.status, 'Claude');
       throw new Problem(502, 'Claude is niet bereikbaar.');
     }
+    const u = response.usage ?? {};
+    const cachedIn = count(u.cache_read_input_tokens) + count(u.cache_creation_input_tokens);
+    report('claude', String(response.model || model), count(u.input_tokens) + cachedIn, count(u.output_tokens), count(u.cache_read_input_tokens));
     if (response.stop_reason === 'refusal') return 'Daar kan ik je niet mee helpen.';
     text = response.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim() || text;
     // Volledige inhoud terugsturen (ook denkblokken), anders klopt de gespreksgeschiedenis niet.
@@ -135,6 +149,9 @@ async function openaiCompatible(config: AIConfig, input: ConverseInput): Promise
     }
     if (!response.ok) throw apiProblem(response.status, label);
     const data = await response.json().catch(() => null);
+    const u = data?.usage ?? {};
+    report(config.provider, String(data?.model || input.model || modelOf(config)), count(u.prompt_tokens), count(u.completion_tokens),
+      count(u.prompt_cache_hit_tokens ?? u.prompt_tokens_details?.cached_tokens));
     const message = data?.choices?.[0]?.message;
     if (!message) throw new Problem(502, `${label} gaf een leeg antwoord.`);
     text = (typeof message.content === 'string' ? message.content : '').trim() || text;
@@ -158,3 +175,61 @@ export async function testConnection(config: AIConfig) {
   });
   if (!reply) throw new Problem(502, `${labelOf(config)} gaf geen antwoord.`);
 }
+
+/** Basisadres van de OpenAI-compatibele API van een aanbieder (zonder /chat/completions). */
+function apiBase(config: AIConfig) {
+  if (config.provider === 'local') return (config.baseUrl || 'http://127.0.0.1:11434/v1').replace(/\/$/, '');
+  return providers[config.provider].url.replace(/\/chat\/completions$/, '');
+}
+
+/** De modellen die deze sleutel mag gebruiken, volgens de aanbieder zelf (gesorteerd, hooguit 80). */
+export async function listModels(config: AIConfig): Promise<string[]> {
+  const label = labelOf(config);
+  let ids: string[] = [];
+  if (config.provider === 'claude') {
+    sdk ??= import('@anthropic-ai/sdk');
+    const { default: Anthropic } = await sdk;
+    try {
+      const page = await new Anthropic({ apiKey: config.key, maxRetries: 1, timeout: 20_000 }).models.list({ limit: 100 });
+      ids = page.data.map((m: { id: string }) => m.id);
+    } catch (error) {
+      if (error instanceof Anthropic.APIError) throw apiProblem(error.status, label);
+      throw new Problem(502, `${label} is niet bereikbaar.`);
+    }
+  } else {
+    let response: Response;
+    try {
+      response = await fetch(apiBase(config) + '/models', {
+        redirect: 'error', signal: AbortSignal.timeout(20_000),
+        headers: config.key ? { Authorization: 'Bearer ' + config.key } : {},
+      });
+    } catch {
+      throw new Problem(502, `${label} is niet bereikbaar.`);
+    }
+    if (!response.ok) throw apiProblem(response.status, label);
+    const data = await response.json().catch(() => null);
+    ids = (Array.isArray(data?.data) ? data.data : []).map((m: any) => m?.id).filter((id: unknown) => typeof id === 'string');
+    // OpenAI geeft ook beeld-, spraak- en embeddingmodellen: alleen chatmodellen tonen.
+    if (config.provider === 'openai') ids = ids.filter(id => /^(gpt|o\d|chatgpt)/.test(id) && !/(audio|realtime|transcribe|tts|image|search|embedding)/.test(id));
+    if (config.provider === 'mistral') ids = ids.filter(id => !/(embed|moderation|ocr)/.test(id));
+  }
+  return [...new Set(ids.filter(id => /^[a-z0-9._:/-]{1,128}$/i.test(id)))].sort().slice(0, 80);
+}
+
+/**
+ * Prijzen in dollar per miljoen tokens (invoer, uitvoer), als schatting voor het kostenoverzicht.
+ * Aanbieders melden geen bedragen, alleen tokens; je kunt elke prijs zelf aanpassen. Cache-invoer
+ * rekenen we tegen een tiende van de invoerprijs.
+ */
+export const defaultPrices: { match: RegExp; in: number; out: number }[] = [
+  { match: /^claude-opus/, in: 5, out: 25 },
+  { match: /^claude-(sonnet|fable)/, in: 3, out: 15 },
+  { match: /^claude-haiku/, in: 1, out: 5 },
+  { match: /^gpt-4\.1-nano/, in: 0.1, out: 0.4 },
+  { match: /^gpt-4\.1-mini/, in: 0.4, out: 1.6 },
+  { match: /^gpt-4\.1/, in: 2, out: 8 },
+  { match: /^mistral-large/, in: 0.5, out: 1.5 },
+  { match: /^mistral-medium/, in: 0.4, out: 2 },
+  { match: /^mistral-small/, in: 0.1, out: 0.3 },
+  { match: /^deepseek/, in: 0.28, out: 0.42 },
+];

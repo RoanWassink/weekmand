@@ -113,18 +113,12 @@ export function cookieValue(header: string | undefined, name: string) {
   return undefined;
 }
 
-const LOOPBACK = ['127.0.0.1', '::1', '::ffff:127.0.0.1'];
-const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i;
-const PRIVATE_V4 = /^(?:::ffff:)?(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
+const PRIVATE = /^(?:::ffff:)?(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)|^::1$/;
 
 /**
- * Komt dit verzoek van deze computer zelf? Normaal: via 127.0.0.1 en met localhost in de adresbalk.
- * In Docker komt elk verzoek binnen via Dockers eigen netwerk (bijv. 172.17.0.1). Staat de poort
- * alleen op de eigen computer open (compose geeft DOCKER_BIND_IP=127.0.0.1 door), dan kan alleen
- * die computer Weekmand bereiken en telt localhost ook dan als lokaal.
+ * Komt dit verzoek uit het eigen netwerk (thuisnetwerk, deze computer, of Dockers eigen netwerk)?
+ * Alleen nodig voor het allereerste account; daarna beheert iedereen die is ingelogd de koppelingen.
  */
-export function localRequest(remote: string, host: string, dockerBindIp = '') {
-  if (!LOCAL_HOST.test(host)) return false;
-  if (LOOPBACK.includes(remote)) return true;
-  return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(dockerBindIp.trim()) && PRIVATE_V4.test(remote);
+export function privateClient(remote: string) {
+  return PRIVATE.test(remote);
 }

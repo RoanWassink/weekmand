@@ -2,12 +2,12 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { BlockList, isIPv4 } from 'node:net';
+import { isIPv4 } from 'node:net';
 import { dirname, join } from 'node:path';
 import { handleAction, reasons } from './actions.ts';
 import { Weekmand } from './app.ts';
 import { Assistant } from './assistant.ts';
-import { Accounts, cookieValue, localRequest, sessionDays } from './auth.ts';
+import { Accounts, cookieValue, privateClient, sessionDays } from './auth.ts';
 import { Store } from './db.ts';
 import { PICNIC_IMAGE_ORIGIN } from './shop.ts';
 import { check, Problem } from './errors.ts';
@@ -78,28 +78,15 @@ const lanHost = process.env.LAN_HOST;
 if (lanHost && (!isIPv4(lanHost) || !/^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(lanHost) || !password?.trim())) {
   throw new Error('LAN_HOST vereist een privé-IPv4-adres en een ingesteld APP_PASSWORD.');
 }
-const setupSubnet = process.env.LAN_SETUP_SUBNET;
-const setupClients = new BlockList();
-if (setupSubnet) {
-  const match = /^(\d+\.\d+\.\d+\.\d+)\/(\d{1,2})$/.exec(setupSubnet);
-  if (!lanHost || !match || !isIPv4(match[1]) || Number(match[2]) < 16 || Number(match[2]) > 32) {
-    throw new Error('LAN_SETUP_SUBNET vereist LAN_HOST en een IPv4-subnet met een prefix van /16 tot /32.');
-  }
-  setupClients.addSubnet(match[1], Number(match[2]), 'ipv4');
-  if (!setupClients.check(lanHost, 'ipv4')) throw new Error('LAN_HOST valt buiten LAN_SETUP_SUBNET.');
-}
-function local(req: IncomingMessage) {
-  return localRequest(req.socket.remoteAddress ?? '', req.headers.host ?? '', process.env.DOCKER_BIND_IP);
-}
-/** Sleutels en wachtwoorden invoeren mag alleen via localhost of het toegestane thuisnetwerk. */
-function canConfigure(req: IncomingMessage) {
-  if (local(req)) return true;
-  return !!setupSubnet && req.socket.localAddress === lanHost && req.headers.host?.split(':')[0] === lanHost &&
-    setupClients.check(req.socket.remoteAddress ?? '', 'ipv4');
-}
+/**
+ * Koppelingen (Picnic, AH, AI, Telegram) beheert iedereen die is ingelogd, vanaf elk adres
+ * (besluit 09-11: "Haal dat gewoon weg"). Het eerste account maak je aan vanuit het eigen netwerk.
+ */
+const canConfigure = (req: IncomingMessage) => uiAllowed(req);
 function requireConfigure(req: IncomingMessage) {
-  check(canConfigure(req), 'Open Weekmand via localhost of het toegestane thuisnetwerk om koppelingen te beheren.', 403);
+  check(canConfigure(req), 'Log eerst in.', 401);
 }
+const firstAccountAllowed = (req: IncomingMessage) => privateClient(req.socket.remoteAddress ?? '');
 
 // ───────────── Hulpjes ─────────────
 
@@ -246,7 +233,12 @@ const ui: Record<string, Handler> = {
   'budget/photo': async i => app.previewReceiptPhoto(i.image),
   'budget/photo/save': i => app.saveReceiptPhoto(i),
   'ai/connect': async (i, req) => { requireConfigure(req); return assistant.connect(obj(i) as any); },
-  'ai/disconnect': (_i, req) => { requireConfigure(req); assistant.disconnect(); return {}; },
+  'ai/disconnect': (i, req) => { requireConfigure(req); assistant.disconnect(typeof i.provider === 'string' ? i.provider : undefined); return {}; },
+  // Wisselen en de modellijst gebruiken de bewaarde sleutel; die gaat nooit naar de webapp.
+  'ai/use': async i => assistant.use(obj(i) as any),
+  'ai/models': async i => assistant.models(String(i.provider ?? '')),
+  'ai/usage': () => assistant.usage(),
+  'ai/price': i => assistant.setPrice(String(i.model ?? ''), i.price === null ? null : { in: Number((i.price as any)?.in), out: Number((i.price as any)?.out) }),
   'telegram/token': (i, req) => {
     requireConfigure(req);
     check(typeof i.token === 'string' && /^\d{5,15}:[A-Za-z0-9_-]{30,60}$/.test(i.token.trim()), 'Dit lijkt geen Telegram-bottoken. Je krijgt het van @BotFather.');
@@ -279,7 +271,7 @@ function setSession(res: ServerResponse, token: string | null) {
     : `${COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
 }
 async function auth(action: string, req: IncomingMessage, res: ServerResponse) {
-  const status = () => ({ user: uiUser(req), required: loginRequired(), setup: accounts.count === 0 && canConfigure(req) });
+  const status = () => ({ user: uiUser(req), required: loginRequired(), setup: accounts.count === 0 && firstAccountAllowed(req) });
   if (action === 'status') return json(res, 200, status());
   if (req.method !== 'POST') throw new Problem(405, 'Gebruik POST.');
   const input = obj(await body(req));
@@ -290,7 +282,7 @@ async function auth(action: string, req: IncomingMessage, res: ServerResponse) {
   }
   if (action === 'setup') {
     check(accounts.count === 0, 'Er bestaat al een account. Log in.', 409);
-    check(canConfigure(req), 'Het eerste account maak je aan vanaf het thuisnetwerk.', 403);
+    check(firstAccountAllowed(req), 'Het eerste account maak je aan vanaf het thuisnetwerk.', 403);
     const name = accounts.create(input.name, input.password);
     setSession(res, accounts.startSession(name));
     return json(res, 200, { user: name });

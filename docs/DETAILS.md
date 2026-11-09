@@ -33,7 +33,7 @@ npm start
 
 Open [Weekmand](http://127.0.0.1:8080). Zonder verdere instellingen draait alles met een demowinkel, zodat je het menu, de berekening en de goedkeuring kunt uitproberen. **Mand → Bestelling afronden (demo)** doet alsof de bestelling geleverd is; de producten gaan dan in de voorraad.
 
-Instellingen kunnen in `.env` (zie `.env.example`) of in de webapp onder **Meer**. Sleutels en wachtwoorden invoeren kan alleen via localhost of via het subnet in `LAN_SETUP_SUBNET`.
+Instellingen kunnen in `.env` (zie `.env.example`) of in de webapp onder **Meer**. Koppelingen (Picnic, AH, AI, Telegram) beheert iedereen die is ingelogd, ook via `weekmand.local` of je telefoon; alleen het allereerste account maak je aan vanuit je eigen netwerk.
 
 ### Picnic koppelen
 
@@ -73,7 +73,7 @@ AH heeft geen openbare API. Weekmand gebruikt de API van de AH-app, zoals commun
 
 ### AI koppelen (optioneel)
 
-**Meer → AI-aanbieder**: Claude (Anthropic), OpenAI, Mistral, DeepSeek of een lokaal model met een OpenAI-compatibele API (bijv. Ollama). Het standaardmodel voor Claude is `claude-opus-5-5`; voor lagere kosten vul je `claude-haiku-5-5` in als model-ID. Claude loopt via de officiële Anthropic SDK; bij een weigering schakelt de API automatisch naar een terugvalmodel. Het taalmodel krijgt menu, voorraad en mandinformatie via tools, maar kan de mand niet zelf toepassen: dat gaat altijd via de knop.
+**Meer → AI-aanbieder**: Claude (Anthropic), OpenAI, Mistral, DeepSeek of een lokaal model met een OpenAI-compatibele API (bijv. Ollama). Je kunt meerdere aanbieders tegelijk koppelen; elke sleutel wordt één keer ingevoerd en bewaard (de webapp toont alleen de laatste vier tekens). Per aanbieder kies je het model uit de lijst die de aanbieder zelf geeft, en met **Gebruiken** wissel je van aanbieder. Opnieuw opslaan zonder sleutel houdt de bewaarde sleutel. Onder **Verbruik en kosten** staan per maand, aanbieder en model het aantal aanvragen, de tokens (in, uit, uit de cache) en een schatting in dollars; aanbieders melden alleen tokens, dus de prijs per miljoen tokens kun je per model aanpassen. Het standaardmodel voor Claude is `claude-opus-5-5`; voor lagere kosten vul je `claude-haiku-5-5` in als model-ID. Claude loopt via de officiële Anthropic SDK; bij een weigering schakelt de API automatisch naar een terugvalmodel. Het taalmodel krijgt menu, voorraad en mandinformatie via tools, maar kan de mand niet zelf toepassen: dat gaat altijd via de knop.
 
 ### Telegram-meldingen
 
@@ -147,7 +147,7 @@ Geheugen: ongeveer 50–80 MB in gebruik. Met `NODE_OPTIONS=--max-old-space-size
 docker compose up --build -d
 ```
 
-Alpine-image in twee fasen, `mem_limit: 150m`, data in het volume `weekmand`. Standaard alleen op localhost: open dan `http://localhost:8080` op dezelfde computer om Picnic, AH, de AI en Telegram te koppelen. In Docker komt elk verzoek binnen via Dockers eigen netwerk; omdat de poort alleen op die computer openstaat, geeft compose dat door (`DOCKER_BIND_IP`) en telt localhost toch als lokaal. Zet je `BIND_IP` op een adres in je thuisnetwerk (met `APP_PASSWORD`), dan vervalt dat: koppel dan eerst met de standaardinstelling en zet daarna `BIND_IP`. Koppelingen blijven in het volume bewaard.
+Alpine-image in twee fasen, `mem_limit: 150m`, data in het volume `weekmand`. Standaard alleen op localhost (`http://localhost:8080`); zet `BIND_IP` en `APP_PASSWORD` voor toegang vanaf het thuisnetwerk. Koppelingen blijven in het volume bewaard.
 
 ## Veiligheid en privacy
 
