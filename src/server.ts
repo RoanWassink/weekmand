@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isIPv4 } from 'node:net';
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import { dirname, join } from 'node:path';
 import { handleAction, reasons } from './actions.ts';
 import { Weekmand } from './app.ts';
@@ -297,7 +298,23 @@ async function auth(action: string, req: IncomingMessage, res: ServerResponse) {
 
 // ───────────── HTTP ─────────────
 
+// Meten waar de app op wacht: trage aanvragen (meestal Picnic of de AI) en momenten waarop de
+// server helemaal vastzit (zwaar rekenwerk). Alleen het adres en de duur, geen inhoud.
+const SLOW_REQUEST_MS = Number(process.env.SLOW_REQUEST_MS || 1500);
+const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+loopDelay.enable();
+setInterval(() => {
+  const worst = loopDelay.max / 1e6;
+  if (worst > 300) console.log(`Weekmand zat ${Math.round(worst)} ms vast (de traagste keer in de afgelopen minuut).`);
+  loopDelay.reset();
+}, 60_000).unref();
+
 async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+  const started = performance.now();
+  res.once('finish', () => {
+    const ms = Math.round(performance.now() - started);
+    if (ms >= SLOW_REQUEST_MS && req.url !== '/mcp') console.log(`Traag: ${req.method} ${(req.url ?? '').split('?')[0]} ${ms} ms (status ${res.statusCode})`);
+  });
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
