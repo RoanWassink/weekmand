@@ -1328,26 +1328,103 @@ function receiptMapRow(u) {
     btn('Negeer', () => run(async () => { await api('ah/map', { name: u.name, ingredient: null }); toast(`${u.name} wordt voortaan overgeslagen.`); }), 'small ghost')));
 }
 
+const AI_PROVIDERS = [['claude', 'Claude (Anthropic)'], ['openai', 'OpenAI'], ['mistral', 'Mistral'], ['deepseek', 'DeepSeek'], ['local', 'Lokaal model (Ollama e.d.)']];
+/** Modellen per aanbieder, één keer per sessie bij de aanbieder opgevraagd. */
+const aiModels = new Map();
+const tokens = n => n >= 1e6 ? amountNl.format(n / 1e6) + ' mln' : n >= 1e3 ? amountNl.format(n / 1e3) + 'k' : String(n);
+const usd = new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const dollars = n => n > 0 && n < 0.01 ? '< ' + usd.format(0.01) : usd.format(n);
+const monthName = m => new Intl.DateTimeFormat('nl-NL', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(m + '-15T12:00:00Z'));
+
 function renderAI() {
-  const parts = [el('p', {}, S.ai ? el('b', {}, `Actief: ${S.ai.label} · ${S.ai.model} (${S.ai.source})`) : 'Geen AI gekoppeld. De chat werkt dan met vaste commando\'s.')];
-  if (!S.canConfigure) {
-    parts.push(el('p', { class: 'muted small' }, 'Een sleutel invoeren kan alleen via localhost of het toegestane thuisnetwerk.'));
-  } else {
-    const provider = el('select', {}, ...[['claude', 'Claude (Anthropic)'], ['openai', 'OpenAI'], ['mistral', 'Mistral'], ['deepseek', 'DeepSeek'], ['local', 'Lokaal model (Ollama e.d.)']].map(([v, t]) => el('option', { value: v }, t)));
-    const key = el('input', { type: 'password', autocomplete: 'off', placeholder: 'API-sleutel' });
-    const model = el('input', { placeholder: 'Model-ID (leeg = standaard)' });
-    const baseUrl = el('input', { placeholder: 'http://192.168.1.20:11434/v1', hidden: true });
-    const remember = el('input', { type: 'checkbox', checked: true });
-    provider.onchange = () => { baseUrl.hidden = provider.value !== 'local'; };
-    parts.push(el('form', { class: 'stack', onsubmit: e => {
+  const ai = S.ai;
+  const linked = ai?.providers ?? [];
+  const parts = [el('p', {}, ai ? el('b', {}, `Actief: ${ai.label} · ${ai.model}`) : 'Geen AI gekoppeld. De chat werkt dan met vaste commando\'s.')];
+  if (ai?.source === 'server') parts.push(el('p', { class: 'muted small' }, 'Ingesteld op de server (AI_PROVIDER). Een aanbieder die je hieronder koppelt, gaat voor.'));
+
+  // Gekoppelde aanbieders: wisselen en een ander model kiezen zonder de sleutel opnieuw in te voeren.
+  for (const p of linked) {
+    const models = el('select', { 'aria-label': `Model van ${p.label}` }, el('option', { value: p.model, selected: true }, p.model));
+    const fill = list => {
+      const names = [...new Set([p.model, ...list])];
+      put(models, ...names.map(m => el('option', { value: m, selected: m === p.model || undefined }, m)));
+    };
+    if (aiModels.has(p.provider)) fill(aiModels.get(p.provider));
+    else api('ai/models', { provider: p.provider }).then(r => { aiModels.set(p.provider, r.models); fill(r.models); }).catch(() => { /* alleen het huidige model */ });
+    models.onchange = () => run(async () => { await api('ai/use', { provider: p.provider, model: models.value }); toast(`${p.label} gebruikt nu ${models.value}.`); });
+    parts.push(el('div', { class: 'ai-provider' + (p.active ? ' active' : '') },
+      el('div', { class: 'row' },
+        el('b', { class: 'grow' }, p.label, p.active ? el('span', { class: 'pill' }, ' actief') : null),
+        el('span', { class: 'muted small' }, [p.keyHint && `sleutel ${p.keyHint}`, p.source === 'sessie' ? 'tot herstart' : ''].filter(Boolean).join(' · '))),
+      models,
+      el('div', { class: 'row' },
+        p.active ? null : btn('Gebruiken', () => run(async () => { await api('ai/use', { provider: p.provider }); toast(`${p.label} is nu actief.`); }), 'small secondary'),
+        btn('Ontkoppelen', () => run(async () => { await api('ai/disconnect', { provider: p.provider }); aiModels.delete(p.provider); toast(`${p.label} ontkoppeld.`); }), 'small ghost danger'))));
+  }
+
+  // Toevoegen of de sleutel vervangen. De bewaarde sleutel komt nooit terug naar de webapp.
+  const provider = el('select', { 'aria-label': 'Aanbieder' }, ...AI_PROVIDERS.map(([v, t]) => el('option', { value: v }, t)));
+  const key = el('input', { type: 'password', autocomplete: 'off', 'aria-label': 'API-sleutel' });
+  const model = el('input', { placeholder: 'Model-ID (leeg = standaard of het gekozen model)', 'aria-label': 'Model-ID' });
+  const baseUrl = el('input', { placeholder: 'http://192.168.1.20:11434/v1', 'aria-label': 'Adres van het lokale model' });
+  const remember = el('input', { type: 'checkbox', checked: true });
+  const sync = () => {
+    const known = linked.find(p => p.provider === provider.value);
+    key.placeholder = known?.keyHint ? `Sleutel ${known.keyHint} is bewaard; leeg laten om hem te houden` : 'API-sleutel';
+    baseUrl.hidden = provider.value !== 'local';
+  };
+  provider.onchange = sync;
+  sync();
+  parts.push(el('details', { class: 'disclosure', open: linked.length ? undefined : true },
+    el('summary', {}, linked.length ? 'Aanbieder toevoegen of sleutel vervangen' : 'Aanbieder koppelen'),
+    el('form', { class: 'stack', onsubmit: e => {
       e.preventDefault();
-      run(async () => { await api('ai/connect', { provider: provider.value, key: key.value, model: model.value, baseUrl: baseUrl.value, remember: remember.checked }); key.value = ''; toast('AI gekoppeld.'); });
+      run(async () => {
+        await api('ai/connect', { provider: provider.value, key: key.value, model: model.value, baseUrl: baseUrl.value, remember: remember.checked });
+        aiModels.delete(provider.value);
+        toast('AI gekoppeld.');
+      });
     } }, provider, key, model, baseUrl,
     el('label', { class: 'check small' }, remember, 'Sleutel onthouden (nodig voor Telegram-chat na een herstart). Wordt opgeslagen in een apart bestand, niet in de database.'),
-    el('p', { class: 'muted small' }, 'Standaardmodel voor Claude is claude-opus-5-5. Voor lagere kosten kun je claude-haiku-5-5 invullen. De test doet één kleine aanvraag.'),
-    el('div', { class: 'row' }, el('button', { class: 'primary' }, 'Testen en koppelen'), S.ai && S.ai.source !== 'server' ? btn('Ontkoppelen', () => run(() => api('ai/disconnect', {})), 'danger') : null)));
-  }
+    el('p', { class: 'muted small' }, 'De test doet één kleine aanvraag. Daarna kies je het model hierboven uit de lijst van de aanbieder.'),
+    el('button', { class: 'primary' }, 'Testen en koppelen'))));
+
+  parts.push(el('div', { id: 'ai-usage', class: 'stack' }));
   put($('ai'), ...parts);
+  loadAiUsage();
+}
+
+/** Verbruik per aanbieder en model, deze en vorige maand. Aanbieders melden tokens, geen bedragen. */
+async function loadAiUsage() {
+  const box = $('ai-usage');
+  if (!box) return;
+  let usage;
+  try { usage = await api('ai/usage', {}); } catch { return; }
+  const months = usage.months.slice(0, 2);
+  put(box, el('h4', {}, 'Verbruik en kosten'),
+    !months.length ? el('p', { class: 'muted small' }, 'Nog geen verbruik. Elk antwoord van de AI wordt vanaf nu meegeteld.') : null,
+    ...months.map(m => el('div', { class: 'stack' },
+      el('div', { class: 'row' }, el('b', { class: 'grow' }, monthName(m.month)), el('b', {}, dollars(m.cost) + (m.unpriced ? ' +' : ''))),
+      ...m.rows.map(r => el('div', { class: 'usage-row' },
+        el('span', { class: 'grow' }, el('span', {}, `${r.label} · ${r.model}`),
+          el('span', { class: 'muted small' }, `${r.calls}× · ${tokens(r.input)} in${r.cached ? ` (${tokens(r.cached)} uit cache)` : ''} · ${tokens(r.output)} uit`)),
+        btn(r.cost === null ? 'Prijs?' : dollars(r.cost), () => priceDialog(r), 'small ghost'))))),
+    months.length ? el('p', { class: 'muted small' }, 'Schatting in dollars: aanbieders melden alleen tokens. Tik op een bedrag om de prijs per miljoen tokens aan te passen; controleer die op de prijspagina van je aanbieder.') : null);
+}
+
+function priceDialog(r) {
+  const input = el('input', { type: 'number', min: '0', step: '0.01', inputmode: 'decimal', value: r.price?.in ?? '', 'aria-label': 'Invoer, dollar per miljoen tokens' });
+  const output = el('input', { type: 'number', min: '0', step: '0.01', inputmode: 'decimal', value: r.price?.out ?? '', 'aria-label': 'Uitvoer, dollar per miljoen tokens' });
+  dialog(`Prijs van ${r.model}`,
+    el('p', { class: 'muted small' }, 'Dollar per miljoen tokens. Invoer uit de cache telt voor een tiende.'),
+    el('form', { class: 'stack', onsubmit: e => {
+      e.preventDefault();
+      run(async () => { await api('ai/price', { model: r.model, price: { in: Number(input.value), out: Number(output.value) } }); closeDialog(); toast('Prijs opgeslagen.'); }, { reload: false }).then(loadAiUsage);
+    } },
+    el('label', { class: 'stack' }, 'Invoer', input),
+    el('label', { class: 'stack' }, 'Uitvoer', output),
+    el('div', { class: 'row' }, el('button', { class: 'primary' }, 'Opslaan'),
+      r.price?.own ? btn('Schatting terugzetten', () => run(async () => { await api('ai/price', { model: r.model, price: null }); closeDialog(); }, { reload: false }).then(loadAiUsage), 'ghost') : null)));
 }
 
 // ───────────── Budget ─────────────

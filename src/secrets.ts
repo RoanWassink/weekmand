@@ -8,7 +8,11 @@ import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from '
 export type SecretData = {
   apiToken?: string;
   picnicAuthKey?: string;
-  ai?: { provider: string; key: string; model?: string };
+  /** Oude vorm (één aanbieder); wordt bij het starten omgezet naar aiProviders. */
+  ai?: { provider: string; key: string; model?: string; baseUrl?: string };
+  /** Gekoppelde AI-aanbieders met hun sleutel en gekozen model; aiActive is de aanbieder die nu werkt. */
+  aiProviders?: Record<string, { key: string; model?: string; baseUrl?: string }>;
+  aiActive?: string;
   telegramToken?: string;
   /** Tokens van het AH-account (geen wachtwoord). */
   ah?: { accessToken: string; refreshToken: string; expiresAt: number; linkedAt: string };
