@@ -141,8 +141,9 @@ async function state(req: IncomingMessage) {
 type Handler = (input: Record<string, any>, req: IncomingMessage) => Promise<unknown> | unknown;
 const ui: Record<string, Handler> = {
   // "Ververs uit Picnic": mand en bezorgmomenten vers lezen.
-  plan: async () => { await app.slots(true).catch(() => []); const plan = await app.plan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
-  'plan/current': async () => { const plan = await app.currentPlan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
+  // De webapp wacht hooguit anderhalve seconde; daarna het vorige voorstel met refreshing: true.
+  plan: async () => { const r = await app.planForUi(true); return { plan: app.withImages(r.plan), summary: planSummary(r.plan), refreshing: r.refreshing }; },
+  'plan/current': async () => { const r = await app.planForUi(false); return { plan: app.withImages(r.plan), summary: planSummary(r.plan), refreshing: r.refreshing }; },
   product: async i => app.productInfo(String(i.id ?? '')),
   apply: async i => app.applyPlan(String(i.id)),
   action: async i => handleAction(app, String(i.data)),

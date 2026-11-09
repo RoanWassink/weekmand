@@ -62,3 +62,26 @@ test('herstart: na een weigering van AH blijft Weekmand twaalf uur weg, ook na e
   await assert.rejects(second.app.ah.list(), { status: 503 });
   assert.equal(calls, 2, 'na twaalf uur mag het weer');
 });
+
+test('webapp wacht niet op een trage Picnic: vorig voorstel met refreshing, daarna het nieuwe', async () => {
+  const { start } = restartable();
+  const { app } = start();
+  await app.proposeMenu();
+  const first = await app.planForUi(false);
+  assert.equal(first.refreshing, false);
+
+  // Picnic (hier de demowinkel) reageert traag: "Ververs uit Picnic" geeft binnen de wachttijd het vorige voorstel.
+  let release!: () => void;
+  const gate = new Promise<void>(r => { release = r; });
+  const read = app.mock.readCart.bind(app.mock);
+  app.mock.readCart = async () => { await gate; return read(); };
+  const quick = await app.planForUi(true, 20);
+  assert.equal(quick.refreshing, true);
+  assert.equal(quick.plan.id, first.plan.id);
+  // Een gewone vraag tijdens het verversen wacht ook niet, en start geen tweede lezing.
+  assert.equal((await app.planForUi(false, 20)).refreshing, true);
+  release();
+  const fresh = await app.planForUi(false, 1000);
+  assert.equal(fresh.refreshing, false);
+  assert.notEqual(fresh.plan.id, first.plan.id);
+});

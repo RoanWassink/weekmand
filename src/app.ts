@@ -95,6 +95,9 @@ export class Weekmand {
   readonly events = new EventEmitter();
   now: () => number;
   #slots: { at: number; slots: DeliverySlot[] } | null = null;
+  #slotsLoading: Promise<DeliverySlot[]> | null = null;
+  /** Een geforceerde "Ververs uit Picnic" die nog loopt; de webapp wacht er niet op. */
+  #refreshing: Promise<Awaited<ReturnType<Weekmand['plan']>>> | null = null;
   #searchCache = new Map<string, ShopProduct>();
   #generation = 0;
   #planCache: { plan: Awaited<ReturnType<Weekmand['plan']>>; at: number; generation: number } | null = null;
@@ -149,6 +152,9 @@ export class Weekmand {
       this.store.set('categoriesFixed1', true);
       if (fixed.ingredients || fixed.recipes) console.log(`Categorieën rechtgezet: ${fixed.ingredients} ingrediënten, ${fixed.recipes} recepten niet meer vegetarisch.`);
     }
+    // Na een herstart de laatst gelezen bezorgmomenten gebruiken; ververst op de achtergrond (zie slots()).
+    const slotsCache = this.store.get<{ at: number; shopMode: string; slots: DeliverySlot[] } | null>('slotsCache', null);
+    if (slotsCache && slotsCache.shopMode === this.shopMode && Array.isArray(slotsCache.slots)) this.#slots = { at: slotsCache.at, slots: slotsCache.slots };
     // Na een herstart de laatste mandberekening (hooguit tien minuten oud) meteen weer gebruiken.
     const snap = this.store.get<PlanSnapshot | null>('planSnapshot', null);
     if (snap && this.now() - snap.at >= 0 && this.now() - snap.at < PICNIC_READ_INTERVAL && snap.shopMode === this.shopMode) {
@@ -218,11 +224,24 @@ export class Weekmand {
 
   async slots(force = false): Promise<DeliverySlot[]> {
     if (!this.shop.ready()) return [];
-    const age = this.#slots ? this.now() - this.#slots.at : Infinity;
-    if (!force && age >= 0 && age < PICNIC_READ_INTERVAL) return this.#slots!.slots;
-    const slots = this.shop === this.mock ? await this.mock.slots(this.now()) : await this.shop.slots();
-    this.#slots = { at: this.now(), slots };
-    return slots;
+    const cached = this.#slots;
+    const age = cached ? this.now() - cached.at : Infinity;
+    if (!force && age >= 0 && age < PICNIC_READ_INTERVAL) return cached!.slots;
+    // Eén lezing tegelijk, ook als menu en bezorging er tegelijk om vragen.
+    const load = this.#slotsLoading ??= (async () => {
+      const slots = this.shop === this.mock ? await this.mock.slots(this.now()) : await this.shop.slots();
+      this.#slots = { at: this.now(), slots };
+      if (this.shop !== this.mock) this.store.set('slotsCache', { at: this.now(), shopMode: this.shopMode, slots });
+      return slots;
+    })().finally(() => { this.#slotsLoading = null; });
+    // Verouderd maar aanwezig: dat meteen gebruiken en Picnic op de achtergrond lezen, zodat de
+    // webapp nooit op Picnic wacht. Verlopen deadlines vallen in delivery() vanzelf af.
+    // De demowinkel is direct; daar gewoon wachten (houdt het voorspelbaar).
+    if (!force && cached && this.shop !== this.mock) {
+      load.catch(error => console.error('Bezorgmomenten:', (error as Error).message));
+      return cached.slots;
+    }
+    return load;
   }
 
   async delivery() {
@@ -1122,6 +1141,34 @@ export class Weekmand {
       this.#planning = { generation, promise };
     }
     return this.#planning.promise;
+  }
+
+  /** "Ververs uit Picnic": mand en bezorgmomenten vers lezen. Gelijktijdige verzoeken delen één lezing. */
+  refreshPlan() {
+    return this.#refreshing ??= (async () => {
+      await this.slots(true).catch(() => []);
+      return this.plan();
+    })().finally(() => { this.#refreshing = null; });
+  }
+
+  /**
+   * Voor de webapp: hooguit `waitMs` wachten. Is het voorstel dan nog niet klaar (Picnic is traag of
+   * er moeten producten gezocht worden), dan het vorige voorstel met `refreshing: true`; het rekenen
+   * loopt door en de app vraagt het zo nog eens op.
+   */
+  async planForUi(force = false, waitMs = 1500) {
+    const work = force || this.#refreshing ? this.refreshPlan() : this.currentPlan();
+    const previous = this.#planCache?.plan;
+    if (!previous) return { plan: await work, refreshing: false };
+    const settled = work.then(plan => ({ plan }), (error: unknown) => ({ error }));
+    const timer = new Promise<null>(resolve => { const t = setTimeout(resolve, waitMs, null); t.unref?.(); });
+    const done = await Promise.race([settled, timer]);
+    if (!done) {
+      settled.then(r => { if ('error' in r) console.error('Voorstel bijwerken:', (r.error as Error)?.message); });
+      return { plan: previous, refreshing: true };
+    }
+    if ('error' in done) throw done.error;
+    return { plan: done.plan, refreshing: false };
   }
 
   /** Breng de mand naar het goedgekeurde overzicht. Herhaalbaar en veilig bij tussentijdse wijzigingen. */
