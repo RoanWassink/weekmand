@@ -244,9 +244,9 @@ export class Store {
   }
   deleteSpend(id: string) { this.#run('DELETE FROM spending WHERE id = ?', id); }
   /** Welke aankopen er al zijn (en of hun regels bekend zijn), zonder alles in te lezen. */
-  spendIndex(source: Spend['source']): Map<string, { date: string; detailed: boolean; discounts: boolean }> {
-    return new Map(this.#all("SELECT id, date, detailed, json_type(body, '$.discounts') IS NOT NULL AS discounts FROM spending WHERE source = ?", source)
-      .map(r => [String(r.id), { date: String(r.date), detailed: !!r.detailed, discounts: !!r.discounts }]));
+  spendIndex(source: Spend['source']): Map<string, { date: string; detailed: boolean; discounts: boolean; sized: boolean }> {
+    return new Map(this.#all("SELECT id, date, detailed, json_type(body, '$.discounts') IS NOT NULL AS discounts, json_extract(body, '$.sized') IS NOT NULL AS sized FROM spending WHERE source = ?", source)
+      .map(r => [String(r.id), { date: String(r.date), detailed: !!r.detailed, discounts: !!r.discounts, sized: !!r.sized }]));
   }
   /** Totalen per dag, voor grafieken over lange tijd. */
   spendTotals(from: string, to: string): { date: string; cents: number }[] {

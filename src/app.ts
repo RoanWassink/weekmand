@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { Catalog, normalize, slug } from './catalog.ts';
 import type { Feedback, ProductLink, Store } from './db.ts';
 import { check, Problem } from './errors.ts';
@@ -14,7 +15,7 @@ import { addDays, dayName, isoWeek, localDate, weekday, weekdays } from './time.
 import type { AvoidRule, BaseUnit, Category, DeliverySlot, Household, IngredientDef, Meal, PantryItem, Recipe, ShopCart, ShopProduct } from './types.ts';
 import { convert, euro, formatAmount, packAmount, parseUnitQuantity, toBase } from './units.ts';
 import { adjustmentLine, bonusPerLine, budgetCategories, budgetFor, categoryFromCatalog, categoryKeys, kindKeys, kindOf, labelKey, matchDiscounts, periodRange, priceChanges, ruleCategory, summarize, toCsv } from './budget.ts';
-import type { BudgetCategory, Period, ProductLabel, ReceiptPhoto, Spend, SpendKind, SpendSource } from './budget.ts';
+import type { BudgetCategory, Period, ProductLabel, ReceiptPhoto, Spend, SpendKind, SpendLine, SpendSource } from './budget.ts';
 import type { ImageInput } from './ai.ts';
 import { importPicnicRecipes } from './picnic-recipes.ts';
 import { AH_LOGIN_URL, AlbertHeijn } from './ah.ts';
@@ -67,6 +68,20 @@ export function baseName(name: string) {
  * dag vanzelf. "Ververs uit Picnic" en doorvoeren lezen altijd vers.
  */
 export const PICNIC_READ_INTERVAL = 12 * 36e5;
+/**
+ * Productkennis die met Weekmand meekomt (scripts/export-products.mjs): AH-verpakkingen per
+ * kassa-id en de indeling van productnamen. Scheelt andere installaties verzoeken aan AH en de AI.
+ * Eigen gegevens gaan altijd voor.
+ */
+export type SharedProducts = { ahSizes: Record<string, string>; labels: Record<string, { category: BudgetCategory; kind: SpendKind }> };
+function loadSharedProducts(): SharedProducts {
+  try {
+    const data = JSON.parse(readFileSync(new URL('./data/products.json', import.meta.url), 'utf8'));
+    return { ahSizes: data?.ahSizes ?? {}, labels: data?.labels ?? {} };
+  } catch { return { ahSizes: {}, labels: {} }; }
+}
+/** Zoveel oudere aankopen per bron en per ronde krijgen alsnog hun verpakkingen (zie syncSpending). */
+const SIZE_BACKFILL = 4;
 
 export class Weekmand {
   readonly store: Store;
@@ -101,8 +116,11 @@ export class Weekmand {
   /** Pauze tussen automatische Picnic-zoekopdrachten (ms). */
   searchPause = 1500;
 
-  constructor(options: { store: Store; secrets: Secrets; picnic?: PicnicShop; ah?: AlbertHeijn; now?: () => number }) {
+  readonly shared: SharedProducts;
+
+  constructor(options: { store: Store; secrets: Secrets; picnic?: PicnicShop; ah?: AlbertHeijn; now?: () => number; shared?: SharedProducts }) {
     this.store = options.store;
+    this.shared = options.shared ?? loadSharedProducts();
     this.secrets = options.secrets;
     this.now = options.now ?? Date.now;
     this.catalog = new Catalog(this.store);
@@ -1258,7 +1276,7 @@ export class Weekmand {
       if (!items.length || items.some(i => typeof i.cents !== 'number') || this.store.spend(id)?.lines) continue;
       const prev = this.store.spend(id);
       this.store.saveSpend({ ...prev, id, source: 'picnic', date: d.date, totalCents: d.paidCents ?? d.totalCents,
-        lines: items.map(i => ({ name: i.name, quantity: i.quantity, cents: i.cents! })), ...(d.savingsCents ? { savingsCents: d.savingsCents } : {}) });
+        lines: items.map(i => ({ name: i.name, quantity: i.quantity, cents: i.cents!, ...(i.pack ? { pack: i.pack } : {}) })), sized: true, ...(d.savingsCents ? { savingsCents: d.savingsCents } : {}) });
     }
     const since = this.store.get<string | null>('trackingSince', null) ?? this.store.update<string | null>('trackingSince', null, () => localDate(this.now()));
     const applied = new Set(this.store.get<string[]>('appliedDeliveries', []));
@@ -1513,7 +1531,7 @@ export class Weekmand {
     return this.budgetSettings();
   }
 
-  /** Hoe een product meetelt: eigen keuze, dan de AI, dan vaste regels, dan de catalogus. */
+  /** Hoe een product meetelt: eigen keuze, dan de AI, dan de meegeleverde indeling, dan vaste regels, dan de catalogus. */
   #labeler() {
     const saved = this.store.get<Record<string, ProductLabel>>('productLabels', {});
     const aliases = this.store.get<Record<string, ReceiptAlias>>('receiptAliases', {});
@@ -1521,7 +1539,8 @@ export class Weekmand {
     return (name: string): ProductLabel | null => {
       const key = labelKey(name);
       if (memo.has(key)) return memo.get(key)!;
-      let label: ProductLabel | null = saved[key] ?? null;
+      const shared = this.shared.labels[key];
+      let label: ProductLabel | null = saved[key] ?? (shared && categoryKeys.includes(shared.category) && kindKeys.includes(shared.kind) ? { ...shared, by: 'gedeeld' } : null);
       const rule = label ? null : ruleCategory(name);
       if (rule) label = { category: rule, kind: kindOf(rule), by: 'regel' };
       if (!label) {
@@ -1553,8 +1572,18 @@ export class Weekmand {
     let calls = 0;
     const pause = async () => { if (calls++ && this.searchPause) await new Promise(r => setTimeout(r, this.searchPause)); };
     // AH-bonnen van vóór de bonusregels komen ook nog een keer langs.
-    const missing = (source: SpendSource, n: number) => [...this.store.spendIndex(source)].filter(([, v]) => !v.detailed || (source === 'ah' && !v.discounts))
-      .sort((a, b) => b[1].date.localeCompare(a[1].date)).slice(0, n);
+    const yearAgo = addDays(today, -366);
+    // Eerst wat nog geen regels heeft; daarna een paar aankopen van het afgelopen jaar zonder
+    // verpakkingen (van vóór 09-11-2026), zodat 'Duurder geworden' per verpakking kan vergelijken.
+    const missing = (source: SpendSource, n: number) => {
+      const all = [...this.store.spendIndex(source)].sort((a, b) => b[1].date.localeCompare(a[1].date));
+      const open = (v: { detailed: boolean; discounts: boolean }) => !v.detailed || (source === 'ah' && !v.discounts);
+      return [
+        ...all.filter(([, v]) => open(v)).slice(0, n),
+        // AH: een bon ophalen is één licht verzoek; Picnic rustiger.
+        ...all.filter(([, v]) => !open(v) && !v.sized && v.date >= yearAgo).slice(0, source === 'ah' ? Math.max(SIZE_BACKFILL, n) : SIZE_BACKFILL),
+      ];
+    };
     if (this.picnic.ready()) {
       try {
         await pause();
@@ -1601,31 +1630,61 @@ export class Weekmand {
           this.#saveAhSpend(id.slice(3), v.date, null, lines, discounts);
           result.detailed++;
         }
+        await this.#lookupAhSizes(yearAgo, pause);
       } catch (error) { result.errors.push('AH: ' + (error as Error).message); }
     }
     this.store.set('spendSync', { at: this.now(), errors: result.errors });
     return result;
   }
 
-  #savePicnicSpend(id: string, date: string, d: { orders: { status: string; checkoutTotalPrice: number; promotionSavings: number; membershipSavings: number; items: { name: string; quantity: number; displayPrice: number }[] }[] }) {
+  #savePicnicSpend(id: string, date: string, d: { orders: { status: string; checkoutTotalPrice: number; promotionSavings: number; membershipSavings: number; items: { name: string; quantity: number; displayPrice: number; unitQuantity?: string }[] }[] }) {
     const orders = d.orders.filter(o => o.status !== 'CANCELLED');
     const prev = this.store.spend(id);
     const savings = orders.reduce((sum, o) => sum + (o.promotionSavings || 0) + (o.membershipSavings || 0), 0);
     this.store.saveSpend({
       ...prev, id, source: 'picnic', date,
       totalCents: orders.reduce((sum, o) => sum + (o.checkoutTotalPrice || 0), 0) || prev?.totalCents || 0,
-      lines: orders.flatMap(o => o.items.map(i => ({ name: i.name, quantity: i.quantity, cents: Math.round(i.displayPrice || 0) }))),
-      ...(savings > 0 ? { savingsCents: savings } : {}),
+      lines: orders.flatMap(o => o.items.map(i => ({ name: i.name, quantity: i.quantity, cents: Math.round(i.displayPrice || 0), ...(i.unitQuantity ? { pack: String(i.unitQuantity).slice(0, 60) } : {}) }))),
+      sized: true, ...(savings > 0 ? { savingsCents: savings } : {}),
     });
+  }
+
+  /**
+   * Verpakkingsmaat van AH-producten op de bonnen van het afgelopen jaar: elk product één keer,
+   * hooguit 25 per keer. Een product dat AH niet kent, wordt na een maand nog eens geprobeerd.
+   */
+  async #lookupAhSizes(since: string, pause: () => Promise<void>) {
+    const known = this.store.get<Record<string, { pack: string | null; at: number }>>('ahSizes', {});
+    const wanted = new Set<string>();
+    for (const s of this.store.spends(since, '9999-12-31')) {
+      if (s.source !== 'ah') continue;
+      for (const l of s.lines ?? []) {
+        const k = l.productId && known[l.productId];
+        if (l.productId && !this.shared.ahSizes[l.productId] && (!k || (k.pack === null && this.now() - k.at > 30 * day))) wanted.add(l.productId);
+      }
+    }
+    if (!wanted.size) return;
+    await pause();
+    const sizes = await this.ah.productSizes([...wanted].slice(0, 25));
+    this.store.update<Record<string, { pack: string | null; at: number }>>('ahSizes', {}, all => {
+      for (const [id, pack] of sizes) all[id] = { pack, at: this.now() };
+      return all;
+    });
+  }
+
+  /** De verpakking van een bonregel: van Picnic meegegeven, of voor AH opgezocht via het product-id. */
+  #packOf() {
+    const ah = this.store.get<Record<string, { pack: string | null }>>('ahSizes', {});
+    return (l: SpendLine) => l.pack ?? (l.productId ? ah[l.productId]?.pack ?? this.shared.ahSizes[l.productId] : null);
   }
 
   /** Een AH-bon in het uitgavenboek; de bonusregels worden op naam aan de producten gekoppeld. */
   #saveAhSpend(receiptId: string, date: string, totalCents: number | null, lines: AhReceiptLine[], discounts: AhDiscount[] | null) {
     const id = 'ah:' + receiptId;
     const prev = this.store.spend(id);
-    const mapped = lines.map(l => ({ name: l.name, quantity: l.quantity || 1, cents: Math.round((l.amount ?? 0) * 100) }));
+    const mapped = lines.map(l => ({ name: l.name, quantity: l.quantity || 1, cents: Math.round((l.amount ?? 0) * 100), ...(l.productId ? { productId: l.productId } : {}) }));
     const found = discounts ? matchDiscounts(mapped, discounts.map(d => ({ name: d.name, cents: Math.round(d.amount * 100) })).filter(d => d.cents)) : prev?.discounts;
-    this.store.saveSpend({ ...prev, id, source: 'ah', date, totalCents: totalCents ?? prev?.totalCents ?? mapped.reduce((sum, l) => sum + l.cents, 0), lines: mapped, ...(found ? { discounts: found } : {}) });
+    this.store.saveSpend({ ...prev, id, source: 'ah', date, totalCents: totalCents ?? prev?.totalCents ?? mapped.reduce((sum, l) => sum + l.cents, 0), lines: mapped, sized: true, ...(found ? { discounts: found } : {}) });
   }
 
   /** Het overzicht voor de Budget-tab: één periode, met de trend ervoor. */
@@ -1664,7 +1723,7 @@ export class Weekmand {
       monthLimits: settings.limits,
       products: summary.products.slice(0, 200),
       unlabeled: summary.products.filter(p => !p.by).length,
-      priceChanges: priceChanges(this.store.spends(addDays(range.end, -365), range.end).filter(s => !s.excluded)).slice(0, 10),
+      priceChanges: priceChanges(this.store.spends(addDays(range.end, -365), range.end).filter(s => !s.excluded), this.#packOf()).slice(0, 10),
       purchases: [...spends].reverse().map(s => ({
         id: s.id, source: s.source, date: s.date, totalCents: s.totalCents, detailed: !!s.lines, lines: s.lines?.length ?? 0,
         shop: s.source === 'picnic' ? 'Picnic' : s.source === 'ah' ? 'Albert Heijn' : s.shop ?? 'Overig', note: s.note ?? null, category: s.category ?? null, excluded: !!s.excluded,

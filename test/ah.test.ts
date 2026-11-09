@@ -56,7 +56,7 @@ function setup() {
   const clock = { now: tuesday };
   const secrets = new Secrets(null);
   const fake = fakeAh();
-  const app = new Weekmand({ store: new Store(':memory:'), secrets, ah: new AlbertHeijn(secrets, fake.fetcher, () => clock.now), now: () => clock.now });
+  const app = new Weekmand({ store: new Store(':memory:'), secrets, ah: new AlbertHeijn(secrets, fake.fetcher, () => clock.now), now: () => clock.now, shared: { ahSizes: {}, labels: {} } });
   app.searchPause = 0;
   const notices: string[] = [];
   app.events.on('notify', n => notices.push(n.text));

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AlbertHeijn } from '../src/ah.ts';
 import { Weekmand } from '../src/app.ts';
+import type { SharedProducts } from '../src/app.ts';
 import { Assistant } from '../src/assistant.ts';
 import { matchDiscounts, periodRange, priceChanges, summarize, toCsv } from '../src/budget.ts';
 import type { Spend } from '../src/budget.ts';
@@ -95,21 +96,36 @@ test('duurder geworden: stuksprijs van de laatste aankoop tegenover de eerste', 
   assert.deepEqual(changes.map(c => [c.name, c.from.unit, c.to.unit, c.percent]), [['Koffiebonen 1 kg', 1200, 1450, 21]]);
 });
 
+test('duurder geworden: alleen dezelfde verpakking telt', () => {
+  const buy = (date: string, cents: number, pack?: string, productId?: string): Spend => ({ id: date, source: 'ah', date, totalCents: cents, lines: [{ name: 'RUNDERGEHAKT', quantity: 1, cents, ...(pack ? { pack } : {}), ...(productId ? { productId } : {}) }] });
+  // Zonder maat: 300 g en 1 kg onder één naam zijn geen prijsstijging van 127%.
+  assert.deepEqual(priceChanges([buy('2026-01-01', 499), buy('2026-02-01', 1149), buy('2026-03-01', 499), buy('2026-04-01', 1149)]), []);
+  // Een echte stijging binnen dezelfde verpakking blijft zichtbaar.
+  assert.deepEqual(priceChanges([buy('2026-01-01', 499), buy('2026-02-01', 1149), buy('2026-03-01', 569)]).map(c => [c.from.unit, c.to.unit, c.percent]), [[499, 569, 14]]);
+  // Met maat: per maat vergeleken, ook als de prijs van de grote verpakking sterk stijgt.
+  const sized = priceChanges([buy('2026-01-01', 499, '300 gram'), buy('2026-02-01', 1000, '1 kg'), buy('2026-03-01', 1690, '1000 g'), buy('2026-04-01', 489, '300 g')]);
+  assert.deepEqual(sized.map(c => [c.pack, c.from.unit, c.to.unit, c.percent]), [['1000 g', 1000, 1690, 69]]);
+  assert.equal(sized[0].pack, '1000 g', 'de maat van de laatste aankoop');
+  // AH-bonregels krijgen de maat via het product-id.
+  const ah = priceChanges([buy('2026-01-01', 499, undefined, 'p300'), buy('2026-02-01', 1149, undefined, 'p1000'), buy('2026-03-01', 549, undefined, 'p300')], l => ({ p300: '300 g', p1000: '1 kg' } as Record<string, string>)[l.productId ?? '']);
+  assert.deepEqual(ah.map(c => [c.pack, c.percent]), [['300 g', 10]]);
+});
+
 /** Nep-Picnic met bezorgingen en nep-AH met bonnen: alleen wat het budget gebruikt. */
-function setup() {
+function setup(shared: SharedProducts = { ahSizes: {}, labels: {} }) {
   const clock = { now: tuesday };
   const secrets = new Secrets(null);
   secrets.set('picnicAuthKey', 'k');
   const calls: string[] = [];
-  const delivery = (id: string, start: string, items: [string, number, number][], extra = {}) => ({
+  const delivery = (id: string, start: string, items: [string, number, number, string?][], extra = {}) => ({
     id, status: 'COMPLETED', windowStart: start, orders: [
-      { id: 'o' + id, status: 'COMPLETED', checkoutTotalPrice: items.reduce((s, i) => s + i[2], 0) + 99, promotionSavings: 50, membershipSavings: 0, items: items.map(([name, quantity, displayPrice]) => ({ name, quantity, displayPrice })), ...extra },
+      { id: 'o' + id, status: 'COMPLETED', checkoutTotalPrice: items.reduce((s, i) => s + i[2], 0) + 99, promotionSavings: 50, membershipSavings: 0, items: items.map(([name, quantity, displayPrice, unitQuantity]) => ({ name, quantity, displayPrice, ...(unitQuantity ? { unitQuantity } : {}) })), ...extra },
       { id: 'x' + id, status: 'CANCELLED', checkoutTotalPrice: 5000, promotionSavings: 0, membershipSavings: 0, items: [{ name: 'Geannuleerd', quantity: 1, displayPrice: 5000 }] },
     ],
   });
   const deliveries: Record<string, any> = {
-    d1: delivery('d1', '2026-11-05T17:00:00Z', [['Halfvolle melk 1 L', 2, 230], ['Haribo goudberen', 1, 199]]),
-    d2: delivery('d2', '2026-10-20T17:00:00Z', [['Kipfilet 600 g', 1, 699]]),
+    d1: delivery('d1', '2026-11-05T17:00:00Z', [['Halfvolle melk 1 L', 2, 230, '1 liter'], ['Haribo goudberen', 1, 199]]),
+    d2: delivery('d2', '2026-10-20T17:00:00Z', [['Kipfilet 600 g', 1, 699, '600 gram']]),
     old: delivery('old', '2021-01-05T17:00:00Z', [['Melk', 1, 100]]),
   };
   const fake = {
@@ -124,8 +140,8 @@ function setup() {
     { id: 'B1', dateTime: '2026-09-01T10:00:00', totalAmount: { amount: 3 } },
   ];
   const details: Record<string, unknown[]> = {
-    B2: [{ name: 'AH PILS 6X33', quantity: 1, amount: { amount: 5.5 } }, { name: 'RAAR PRODUCT', quantity: 1, amount: { amount: 1 } }],
-    B1: [{ name: 'AH HALFVOLLE MELK', quantity: 2, amount: { amount: 3 } }],
+    B2: [{ id: 111, name: 'AH PILS 6X33', quantity: 1, amount: { amount: 5.5 } }, { name: 'RAAR PRODUCT', quantity: 1, amount: { amount: 1 } }],
+    B1: [{ id: 222, name: 'AH HALFVOLLE MELK', quantity: 2, amount: { amount: 3 } }],
   };
   const fetcher = (async (url: string, init: RequestInit = {}) => {
     const body = typeof init.body === 'string' ? JSON.parse(init.body) : {};
@@ -134,14 +150,59 @@ function setup() {
     const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
     if (path === '/mobile-auth/v1/auth/token/refresh') return json({ access_token: 'a', refresh_token: 'r', expires_in: 3600 });
     if (body.query?.includes('posReceiptsPage')) return json({ data: { posReceiptsPage: { posReceipts: body.variables.offset ? [] : receipts } } });
+    // Kassa-id 111 is in de webwinkel product 9111; 222 kent AH niet meer.
+    if (body.query?.includes('productConvertId')) {
+      calls.push('ah omzetten');
+      return json({ data: Object.fromEntries([...body.query.matchAll(/(p\d+): productConvertId\(sourceId: (\d+)\)/g)].map(m => [m[1], m[2] === '111' ? 9111 : null])) });
+    }
+    if (body.query?.includes('salesUnitSize')) {
+      calls.push('ah maten');
+      return json({ data: Object.fromEntries([...body.query.matchAll(/(p\d+): product\(id: (\d+)\)/g)].map(m => [m[1], { id: Number(m[2]), salesUnitSize: '6 x 330 ml' }])) });
+    }
     return json({ data: { posReceiptDetails: { id: body.variables.id, products: details[body.variables.id] } } });
   }) as unknown as typeof fetch;
   secrets.set('ah', { accessToken: 'a', refreshToken: 'r', expiresAt: tuesday + 36e5, linkedAt: '2026-11-01T00:00:00Z' });
   const ah = new AlbertHeijn(secrets, fetcher, () => clock.now);
-  const app = new Weekmand({ store: new Store(':memory:'), secrets, picnic, ah, now: () => clock.now });
+  const app = new Weekmand({ store: new Store(':memory:'), secrets, picnic, ah, now: () => clock.now, shared });
   app.searchPause = 0;
   return { app, clock, calls };
 }
+
+test('budget: verpakkingen van Picnic en AH, elk AH-product één keer opgezocht', async () => {
+  const { app, clock, calls } = setup();
+  // Een bezorging van vóór de verpakkingen: wordt rustig opnieuw opgehaald.
+  app.store.saveSpend({ id: 'picnic:d2', source: 'picnic', date: '2026-10-20', totalCents: 798, lines: [{ name: 'Kipfilet 600 g', quantity: 1, cents: 699 }] });
+  await app.syncSpending({ details: 4 });
+  assert.equal(app.store.spend('picnic:d1')!.lines![0].pack, '1 liter');
+  assert.equal(app.store.spend('picnic:d2')!.lines![0].pack, '600 gram', 'oudere bezorging bijgewerkt');
+  assert.equal(app.store.spend('ah:B2')!.lines![0].productId, '111');
+  assert.equal(app.store.spend('ah:B2')!.lines![1].productId, undefined);
+  assert.deepEqual(app.store.get('ahSizes', {}), { 111: { pack: '6 x 330 ml', at: clock.now }, 222: { pack: null, at: clock.now } });
+  assert.deepEqual(calls.filter(c => c === 'ah omzetten' || c === 'ah maten'), ['ah omzetten', 'ah maten']);
+
+  // Volgende ronde: niets opnieuw opgezocht; een onbekend product pas na een maand weer.
+  await app.syncSpending();
+  assert.equal(calls.filter(c => c === 'ah omzetten').length, 1);
+  clock.now += 31 * 864e5;
+  await app.syncSpending();
+  assert.equal(calls.filter(c => c === 'ah omzetten').length, 2);
+  assert.equal(calls.filter(c => c === 'ah maten').length, 1, 'zonder webwinkelproduct geen tweede verzoek');
+});
+
+test('budget: meegeleverde productkennis scheelt verzoeken aan AH en de AI; eigen keuze gaat voor', async () => {
+  const { app, calls } = setup({ ahSizes: { 111: '6 x 33 cl' }, labels: { 'raar product': { category: 'huishouden', kind: 'geen-eten' } } });
+  await app.syncSpending({ details: 4 });
+  assert.ok(!(app.store.get('ahSizes', {}) as Record<string, unknown>)[111], '111 niet opgezocht');
+  assert.equal(calls.filter(c => c === 'ah maten').length, 0, 'alleen 222 bleef over, en die kent AH niet');
+  const asked: string[][] = [];
+  app.productClassifier = async names => { asked.push(names); return names.map(name => ({ name, category: 'snacks', kind: 'extra' })); };
+  await app.labelProducts();
+  assert.ok(!asked.flat().includes('RAAR PRODUCT'), 'bekende naam niet aan de AI gevraagd');
+  const month = app.budgetOverview({ period: 'month' });
+  assert.equal(month.products.find(p => p.name === 'RAAR PRODUCT')!.by, 'gedeeld');
+  app.setProductLabel({ name: 'raar product', category: 'snacks' });
+  assert.equal(app.budgetOverview({ period: 'month' }).products.find(p => p.name === 'RAAR PRODUCT')!.category, 'snacks');
+});
 
 test('budget: totalen in één keer, regels rustig aan, overzicht per maand', async () => {
   const { app, calls } = setup();
@@ -213,7 +274,7 @@ test('budget: seintje bij 80% en 100% van een zelf ingesteld maandbudget en bij 
 });
 
 test('telegram: antwoorden op een wijziging gaan ook naar de andere gekoppelde chats', async t => {
-  const app = new Weekmand({ store: new Store(':memory:'), secrets: new Secrets(null), now: () => tuesday });
+  const app = new Weekmand({ store: new Store(':memory:'), secrets: new Secrets(null), now: () => tuesday, shared: { ahSizes: {}, labels: {} } });
   const sent: { chat: number; text: string }[] = [];
   let updates = [{ update_id: 1, message: { chat: { id: 1 }, from: { first_name: 'Roan' }, text: 'melk is op' } }];
   t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {

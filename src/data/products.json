@@ -1,0 +1,1586 @@
+{
+ "about": "Gedeelde productkennis voor Weekmand: AH-verpakkingen per kassa-id en de indeling van productnamen. Gemaakt met scripts/export-products.mjs.",
+ "ahSizes": {},
+ "labels": {
+  "'t slagershuys biefstuk": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys bio kipborrelhapjes gekruid": {
+   "category": "vlees-vis",
+   "kind": "extra"
+  },
+  "'t slagershuys diamanthaas": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys gehaktballen": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys gehaktballetjes italiaans gekruid": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys gepaneerde gehaktballen": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "'t slagershuys gerookte spekreepjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys gyros": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys italiaanse braadworstjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys kalkoenschnitzels": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys kipburgers krokant": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys kipdrumsticks": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys kipgehaktschnitzels": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys kiphaasjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys kipsaté ovenschotel": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "'t slagershuys kipschnitzels krokant": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys lamsspiesjes gemarineerd": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys mini gehaktballetjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys ossobuco": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys pepperoni": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys prosciutto di parma": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys salami": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys slagersleverworst": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys slavinken": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys soepballetjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys spareribs": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys spekreepjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys varkensfilets": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys varkenshaas": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys varkenshaas culinair": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys varkenssaucijzen": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "'t slagershuys varkensschnitzels": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "aardappelpartjes met schil": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "aardappelschijfjes": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "aardbei ned": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "aardbeien": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "after eight": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "ah bacon": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "ah ban plak": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "ah basmati": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "ah bio bol": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "ah bio ontbi": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "ah bio rucol": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "ah bio snack": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "ah bio sour": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "ah blad veld": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "ah boerenk": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "ah chantilly": {
+   "category": "zuivel",
+   "kind": "extra"
+  },
+  "ah choc mini": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "ah cottage": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "ah gyoza": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "ah haverdr": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "ah kruidntn": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "ah l&p spelt": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "ah lp sanfra": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "ah mascarpon": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "ah mozzarell": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "ah munt gvp": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "ah pancakes": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "ah panini": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "ah pistolets": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "ah roombrie": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "ah smoothie": {
+   "category": "groente-fruit",
+   "kind": "extra"
+  },
+  "ah sperziebn": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "ah tiramisu": {
+   "category": "diepvries",
+   "kind": "extra"
+  },
+  "ah vol drink": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "ah worstjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "ah zuivelspr": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "ahorn bio": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "angus diamanthaas": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "arla cultura": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "arla skyr naturel": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "autodrop uitdeel vegan cadillacs": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "barilla al bronzo fusilloni": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "beemster": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "ben & jerrys": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "beretta pancetta blokjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "bertolli basis voor pastasaus aglio": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "bieze rauwkost coleslaw": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "bio bieten": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "bio little gem": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "bio pastinaken": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "bio rode bieten gekookt": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "bio sjalotten": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "bio tuinkers": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "bites we love chewy oat bar chocolate": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "bites we love chewy oat bar cinnamon roll": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "bladselderij": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "blauwe bes": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "blauwe bessen": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "blooker cacaopoeder": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "bolletje": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "bolletje goed bezig havermoutrepen rood fruit": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "bolletje lichte crackers spelt": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "bonduelle": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "bonduelle witte bonen": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "bonne maman aardbeien meer fruit": {
+   "category": "voorraadkast",
+   "kind": "extra"
+  },
+  "borek spinaz": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "bossche bol": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "bounty repen": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "bulka tarta": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "bullit": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "butcha ginger lemongras & green tea 0%": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "butcha raspberry rose & black tea 0%": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "calvé caesardressing": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "camp vol yog": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "campina high protein greek powerbowl perzik": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "carbonell kappertjes nonpareilles": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "cheddar rasp": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "cheddar rood 50+": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "cheestring": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "chef besciamella": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "chef panna da cucina houdbaar": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "chinese kool": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "chiquita los": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "chocomel vol": {
+   "category": "zuivel",
+   "kind": "extra"
+  },
+  "chorizo": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "ciabattina": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "citroengras": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "clipper bio chamomile peach & orange fusion": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "clipper chamomile with a twist of peach": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "clipper tokyo gardens": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "conference": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "conference peren": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "conimex boemboe ajam smoor": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "conimex boemboe rendang vlees": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "conimex kroepoek cassave": {
+   "category": "voorraadkast",
+   "kind": "extra"
+  },
+  "conimex kroepoek naturel": {
+   "category": "voorraadkast",
+   "kind": "extra"
+  },
+  "cornflakes": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "cottage ch": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "cottage chee": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "crisp sticks": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "danio luchtige kwark bosbessen": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "danio stracciatella kwark": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "danone skyr aardbei": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "danone skyr naturel": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "danone skyr vanille": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "de cecco maccheroni nr122": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "de cecco mafaldine nr2": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "de cecco pappardelle all'uovo no. 101": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "de cecco tagliatelle all'uovo no. 104": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "deli choco": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "delizie di calabria nduja": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "deliziosa burrata": {
+   "category": "zuivel",
+   "kind": "extra"
+  },
+  "diamanthaas": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "dodoni yogh": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "douwe egberts premium snelfilter mocca": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "dr. oetker vanillearoma": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "droom dessert rijstdessert vanille": {
+   "category": "zuivel",
+   "kind": "extra"
+  },
+  "druiven": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "druiven wit": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "ds pisto vol": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "duryea maizena bindmiddel": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "duyvis tijgernoten flamin' hot": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "dzh rasp": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "earth & wheat gevouwen volkoren flatbreads": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "eti tutku": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "euroma laurier gevriesdroogd": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "faja lobi nasi trafasie": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "fast fruit açai": {
+   "category": "groente-fruit",
+   "kind": "extra"
+  },
+  "fat bastard": {
+   "category": "alcohol",
+   "kind": "extra"
+  },
+  "fentimans raspberry": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "fentimans rose lemonade": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "flatbreads gevouwen": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "focacci brie": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "franse pavé": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "frikandel br": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "frontaal": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "ft rode curr": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "galbani italiaanse ricotta cremosa": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "gesneden ananas": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "go-tan miehoen": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "goudsalami": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "grand'italia mini conchiglie tradizionali": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "grf rosbief": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "groene asperges": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "gulpener korenwolf wit": {
+   "category": "alcohol",
+   "kind": "extra"
+  },
+  "hak rode kool": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "hanabi mirin fu rijstwijn": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "haverkoekjes": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "heinz tomato blokjes": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "hela curry": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "henri verse pastasaus bolognese": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "hertog ijs": {
+   "category": "diepvries",
+   "kind": "extra"
+  },
+  "hip pop komb": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "holie meusli": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "hollandia": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "ijsblokjes": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "il molino droge gist": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "italia bol": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "italiaanse bollen": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "jan napoli": {
+   "category": "alcohol",
+   "kind": "extra"
+  },
+  "jonagold": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "jude's choco": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "karvan cévitam siroop cassis": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "kellogg's coco pops chocos": {
+   "category": "brood",
+   "kind": "extra"
+  },
+  "kellogg's cornflakes": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "kerrygold": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "kesbeke amsterdamse zure augurkjes": {
+   "category": "voorraadkast",
+   "kind": "extra"
+  },
+  "kipkluifjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "kiwi's": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "km482 pinot noir": {
+   "category": "alcohol",
+   "kind": "extra"
+  },
+  "knolselderij": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "knorr peperroomsaus": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "koffieboeket": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "kroket rund": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "ks croissant": {
+   "category": "brood",
+   "kind": "extra"
+  },
+  "kuhne cornic": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "l&p pompoen": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "l&p zonnerog": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "l&pmeerz zz": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "la molisana cubetto n° 63": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "la molisana farfalle rigate n° 66": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "lambweston homestyle rustic fries": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "larco gevogeltefond": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "lay's sens": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "lee kum kee kung black bean garlic stir-fry sauce": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "leffe zomer": {
+   "category": "alcohol",
+   "kind": "extra"
+  },
+  "liga cracotte naturel 2x": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "liga cracotte vezelrijk 2x": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "liguori": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "lipton ice t": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "lipton spark": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "lp triomphe": {
+   "category": "alcohol",
+   "kind": "extra"
+  },
+  "lu mini": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "lu mini crackers naturel 8x": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "maggi braadstomen provencaal": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "maggi jus": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "maiskolf": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "maldon": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "mangiare pan de ajo": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "mangiare tomatentapenade": {
+   "category": "voorraadkast",
+   "kind": "extra"
+  },
+  "marhaba": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "mars mars minimix repen uitdeelzak": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "meatier biefstuk": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "merci": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "merci petits chocolate collection": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "milka melkcrème": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "mini-watermeloen": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "monst ultra": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "monst zero": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "monster": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "mora crispy": {
+   "category": "diepvries",
+   "kind": "extra"
+  },
+  "mora frikand": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "munt": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "mutti pizza": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "mutti pomodoro san marzano": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "mutti tomate frito": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "mutti triple tomatenconcentraat": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "nectarines": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "nederlandse": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "nonnapepa chimichurri": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "oatly matcha": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "oerd meergr": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "oldtimers jochums favorieten": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "pancetta bl": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "pastasaus po": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "paturain naturel": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "pecorino": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "pecorino 35+": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "peijnenburg": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "perfect ted": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "peulen": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "pickwick": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "pickwick super blends immunity": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "picnic aardappelpartjes provençaals gekruid": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "picnic aardbeien": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic ananas gesneden": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic ananasstukjes op siroop": {
+   "category": "groente-fruit",
+   "kind": "extra"
+  },
+  "picnic appelcompote": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic bagels everything": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "picnic bagels naturel": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "picnic bio cranberries": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic bio haverdrink ongezoet": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "picnic bio sultana rozijnen": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic bio witte kool fijngesneden": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic bloemkoolroosjes": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic boerenkool fijngesneden": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic brie": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "picnic cambodjaanse wokmix": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic choco kussentjes": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "picnic ciabatta": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "picnic cottage cheese 20%": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "picnic croutons naturel": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic demi baguettes wit": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "picnic farfalle no. 235": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic fijne havervlokken": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "picnic frituurvet vloeibaar": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic goudse jong 48+ plakken": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "picnic granaatappelpitjes": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic grote briochebollen": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "picnic high protein drink aardbei": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "picnic high protein pudding vanille": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "picnic huiswijn rood soepel": {
+   "category": "alcohol",
+   "kind": "extra"
+  },
+  "picnic hutspotgroente": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "picnic italiaanse bollen": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "picnic kalkoenfilet": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "picnic kookt butter chicken": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "picnic kookzuivel 7% vet": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "picnic kroepoek naturel": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic linguine no. 212": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic pijnboompitten": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic pinda's gezouten": {
+   "category": "voorraadkast",
+   "kind": "extra"
+  },
+  "picnic pistolets wit": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "picnic rigatoni no. 249": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic royale meringue mini sterretjes": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "picnic seroendeng": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic snackworteltjes": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic snijbonen gesneden": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic spitskool": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic tagliatelle no. 304": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic thaise wokmix": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic tiramisu": {
+   "category": "diepvries",
+   "kind": "extra"
+  },
+  "picnic tomatentapenade": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic vegan grote kipstukjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "picnic vegan kipstukjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "picnic verse aioli": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic verse aioli mini": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "picnic verse ravioli al formaggio": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "picnic verse tortellini di prosciutto crudo": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "picnic volkoren fijne havervlokken": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "picnic wasabi bollen": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "picnic wilde blauwe bessen": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "picnic zwarte olijvenschijfjes": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "planet deli gevouwen flatbreads": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "président romige brie 60+": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "pruimen": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "pt croissant": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "quaker cruesli 4 noten": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "rabarber": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "raw bio chiazaad": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "rode bessen": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "rode druiven": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "romaatjes": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "rond wit hf": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "roombotercroissants": {
+   "category": "brood",
+   "kind": "extra"
+  },
+  "roombrie 60+": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "royal geroosterde rode paprikareepjes": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "royal tonic": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "s&b japanse curryblokjes mild": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "saitaku miso soep": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "saitaku sushi & salad sprinkle": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "saitaku udon noodles": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "salie": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "san pellegrino limonata": {
+   "category": "drinken",
+   "kind": "extra"
+  },
+  "santa maria crispy chicken bites mix": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "shiitake gesneden": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "silifke": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "skuumkoppe": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "slagershuis chorizo": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "slagersrookw": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "smaakt bio gepofte spelt": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "snelle jelle kruidkoek": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "snickers": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "soepgr boer": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "sojabonen": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "sojadrink": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "spa reine": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "speltbol": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "spianata romana": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "starb coffee": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "steg bistro": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "steg fuet": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "superieur kalkoenfilet": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "tagliatelle": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "tante fanny filodeeg": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "tante fanny quiche- en taartdeeg": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "texels 0.0": {
+   "category": "alcohol",
+   "kind": "extra"
+  },
+  "tony's chocolonely wit 28%": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "trappe blnd": {
+   "category": "alcohol",
+   "kind": "extra"
+  },
+  "trek": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "trip blends": {
+   "category": "drinken",
+   "kind": "nodig"
+  },
+  "turkse pizza": {
+   "category": "diepvries",
+   "kind": "nodig"
+  },
+  "unox knaks": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "vanmenno landbollen bruin": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "vanmenno rustieke bollen wit en meerzaden": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "varkenshaas": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "verkade": {
+   "category": "snacks",
+   "kind": "extra"
+  },
+  "verkade oat crunch original": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "verstegen cajun": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "verstegen gyroskruidenmix": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "verstegen kruidenmix saté": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "wahid kipdöner halal": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "wasa volk": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "witte & rode druiven": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "witte bollen": {
+   "category": "brood",
+   "kind": "nodig"
+  },
+  "witte druiven": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "worch sauce": {
+   "category": "voorraadkast",
+   "kind": "nodig"
+  },
+  "zaanlander": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "zaanse hoeve": {
+   "category": "zuivel",
+   "kind": "nodig"
+  },
+  "zandvliet hamblokjes": {
+   "category": "vlees-vis",
+   "kind": "nodig"
+  },
+  "zespri kiwi's sungold": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "zespri kiwi's sungold groot": {
+   "category": "groente-fruit",
+   "kind": "nodig"
+  },
+  "zuivelhoeve xxl fit pudding duo choco": {
+   "category": "zuivel",
+   "kind": "extra"
+  },
+  "zuivelhoeve xxl fit pudding duo karamel": {
+   "category": "zuivel",
+   "kind": "extra"
+  }
+ }
+}
