@@ -322,7 +322,15 @@ ol.steps li::marker { color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .map-row { display: grid; gap: var(--s2); padding: var(--s3) 0; border-top: 1px solid var(--line); }
 .map-row .map-name { font-weight: 600; overflow-wrap: anywhere; }
 .map-row .map-controls { display: flex; gap: var(--s2); align-items: center; }
-.map-row .map-controls input { flex: 1; min-width: 0; }
+.map-row .map-controls .picker { flex: 1; }
+/* Suggesties onder een productveld (vervangt de datalist, die op telefoons vaak niets toont). */
+.picker { position: relative; display: block; min-width: 0; }
+.add-row .picker { flex: 1; }
+.picker > input { width: 100%; }
+.picker-list { position: absolute; z-index: 20; inset-inline: 0; top: calc(100% + var(--s1)); display: grid; padding: var(--s1);
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-s); box-shadow: 0 8px 24px color-mix(in oklch, var(--ink) 14%, transparent); }
+.picker-option { display: flex; align-items: center; justify-content: flex-start; min-height: var(--tap); padding: 0 var(--s3); text-align: left; background: transparent; color: var(--ink); border: 0; border-radius: calc(var(--radius-s) - 4px); font: inherit; font-weight: 500; }
+.picker-option:hover, .picker-option:focus-visible { background: var(--brand-soft); }
 @media (min-width: 640px) { .map-row { grid-template-columns: minmax(9rem, 1fr) 2fr; align-items: center; } }
 ol.steps code, .hint code { font-size: .95em; padding: 1px 5px; border-radius: 4px; background: color-mix(in oklch, var(--ink-2) 14%, transparent); }
 .hint.empty { margin: var(--s4); }

@@ -194,7 +194,22 @@ test('onbekende bonregels: de AI koppelt ze en Weekmand onthoudt dat', async () 
   app.mapReceiptLine('RAAR DING', 'Halfvolle melk');
   assert.deepEqual(app.unmatchedReceiptLines(), []);
   assert.equal(app.store.pantryItem('melk')?.amount, 2 * app.catalog.ingredient('melk')!.packs[0].amount);
-  assert.throws(() => app.mapReceiptLine('X', 'bestaat echt niet'), { status: 400 });
+  // Een onbekend product: eerst een 404 (de app vraagt dan eenheid en soort), daarna aangemaakt.
+  assert.throws(() => app.mapReceiptLine('EFES SUCUK', 'Efes'), { status: 404 });
+  const made = app.mapReceiptLine('EFES SUCUK', 'Efes', { unit: 'g', category: 'vlees' });
+  assert.equal(app.catalog.ingredient(made.key!)?.name, 'Efes');
+  assert.equal(app.catalog.ingredient(made.key!)?.category, 'vlees');
+  assert.throws(() => app.mapReceiptLine('X', 'Iets', { unit: 'liter' }), { status: 404 });
+});
+
+test('voorraad: een onbekend product bijhouden maakt het aan na de vraag om een eenheid', () => {
+  const { app } = setup();
+  assert.throws(() => app.updatePantry([{ name: 'Broodbeleg', status: 'onbekend' }]), { status: 404 });
+  const [r] = app.updatePantry([{ name: 'Broodbeleg', status: 'onbekend', create: { unit: 'st' } }]);
+  assert.equal(r.name, 'Broodbeleg');
+  assert.equal(app.catalog.resolve('broodbeleg')?.unit, 'st');
+  // Een bekend product negeert create.
+  assert.equal(app.updatePantry([{ name: 'melk', amount: 500, create: { unit: 'st' } }])[0].name, 'Halfvolle melk');
 });
 
 test('zonder AI: zelf koppelen of negeren, en een duidelijke melding bij "laat de AI zoeken"', async () => {

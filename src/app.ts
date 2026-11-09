@@ -43,6 +43,8 @@ export type AhReceiptLog = { id: string; date: string; total: number | null; cou
 export type ReceiptAlias = { key: string | null; amount?: number; by: 'ai' | 'user' };
 export type ReceiptMatch = { receipt: string; kind: 'existing' | 'new' | 'ignore' | 'unknown'; key?: string; name?: string; unit?: string; category?: string; amount?: number };
 /** null: er is geen AI gekoppeld. */
+/** Een nieuw product aanmaken als Weekmand de naam niet kent. */
+export type NewIngredient = { unit?: unknown; category?: unknown };
 export type ReceiptMatcher = (lines: string[], ingredients: { key: string; name: string; unit: BaseUnit }[]) => Promise<ReceiptMatch[] | null>;
 export const receiptKey = (name: string) => name.trim().toLowerCase().replace(/\s+/g, ' ');
 /** null: er is geen AI gekoppeld. */
@@ -626,15 +628,14 @@ export class Weekmand {
    * Werk de voorraad bij. Per item: een hoeveelheid (met eenheid), of een status:
    * 'op', 'bijna op', 'genoeg' (bevestigt de schatting) of 'onbekend'. Optioneel een minimum.
    */
-  updatePantry(items: { name: string; amount?: number; unit?: string; status?: string; minimum?: number; minimumUnit?: string }[]) {
+  updatePantry(items: { name: string; amount?: number; unit?: string; status?: string; minimum?: number; minimumUnit?: string; create?: NewIngredient }[]) {
     check(Array.isArray(items) && items.length > 0 && items.length <= 60, 'Geef 1 tot 60 voorraaditems.');
     const now = new Date(this.now()).toISOString();
     const result: { name: string; text: string }[] = [];
     this.store.tx(() => {
       for (const input of items) {
         check(input && typeof input.name === 'string', 'Elk item heeft een naam.');
-        const def = this.catalog.resolve(input.name);
-        check(def, `Ik ken "${input.name}" niet als ingrediënt.`);
+        const def = this.#ingredientFor(input.name, input.create);
         const item: PantryItem = this.store.pantryItem(def.key) ?? { key: def.key, amount: null, checkedAt: null, minimum: 0 };
         const amountIn = (value: number, unit?: string) => {
           check(typeof value === 'number' && value >= 0 && value < 1e6, 'Ongeldige hoeveelheid voor ' + def.name + '.');
@@ -662,6 +663,20 @@ export class Weekmand {
     return result;
   }
 
+  /**
+   * Een product op naam of sleutel. Kent Weekmand het niet, dan maakt `create` het aan (eenheid,
+   * en eventueel de soort); zonder `create` volgt een 404, zodat de app kan vragen of het erbij moet.
+   */
+  #ingredientFor(name: unknown, create?: NewIngredient): IngredientDef {
+    const text = String(name ?? '').trim();
+    check(text, 'Welk product?');
+    const def = this.catalog.ingredient(text) ?? this.catalog.resolve(text);
+    if (def) return def;
+    check(create && ['g', 'ml', 'st'].includes(String(create.unit)), `"${text}" is nog geen product in Weekmand.`, 404);
+    check(/^[\p{L}\d' -]{2,40}$/u.test(text), 'Een nieuw product heeft een naam van 2 tot 40 letters of cijfers.');
+    return this.catalog.ensureIngredient(text, create.unit as BaseUnit, categories.includes(create.category as Category) ? create.category as Category : undefined);
+  }
+
   /** Iets is op: vanuit Home Assistant, NFC-tag, snelknop of chat. */
   markOut(name: string) { return this.updatePantry([{ name, status: 'op' }])[0]; }
 
@@ -678,10 +693,9 @@ export class Weekmand {
     return { known: true as const, code, name: known.name, ingredient: def.name, left: formatAmount(amount, def.unit), amount };
   }
 
-  registerBarcode(input: { code: string; name: string; packAmount?: number; unit?: string; label?: string }) {
+  registerBarcode(input: { code: string; name: string; packAmount?: number; unit?: string; label?: string; create?: NewIngredient }) {
     check(/^\d{8,14}$/.test(input.code), 'Ongeldige barcode.');
-    const def = this.catalog.resolve(input.name);
-    check(def, `Ik ken "${input.name}" niet als ingrediënt.`);
+    const def = this.#ingredientFor(input.name, input.create);
     let amount = this.#costOptions(def.key)[0]?.packAmount ?? 1;
     if (input.packAmount) {
       const base = toBase(input.packAmount, input.unit ?? def.unit);
@@ -1462,14 +1476,10 @@ export class Weekmand {
   }
 
   /** Zelf een bonregel koppelen aan een ingrediënt (naam of sleutel), of met null negeren. */
-  mapReceiptLine(name: string, ingredient: string | null) {
+  mapReceiptLine(name: string, ingredient: string | null, create?: NewIngredient) {
     check(typeof name === 'string' && name.trim() && name.length <= 80, 'Welke bonregel?');
     let alias: ReceiptAlias = { key: null, by: 'user' };
-    if (ingredient !== null) {
-      const def = this.catalog.ingredient(String(ingredient)) ?? this.catalog.resolve(String(ingredient));
-      check(def, `Ik ken "${ingredient}" niet. Voeg het eerst toe onder Voorraad (Ander product bijhouden).`);
-      alias = { key: def.key, by: 'user' };
-    }
+    if (ingredient !== null) alias = { key: this.#ingredientFor(ingredient, create).key, by: 'user' };
     this.store.update<Record<string, ReceiptAlias>>('receiptAliases', {}, a => ({ ...a, [receiptKey(name)]: alias }));
     this.#recountReceiptLog();
     this.changed();
