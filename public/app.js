@@ -102,8 +102,76 @@ async function api(path, data) {
   });
   const json = await response.json().catch(() => ({}));
   if (response.status === 401 && json.login) { showLogin(); throw new Error('Log eerst in.'); }
-  if (!response.ok) throw new Error(json.error ?? 'Aanvraag mislukt.');
+  if (!response.ok) throw Object.assign(new Error(json.error ?? 'Aanvraag mislukt.'), { status: response.status });
   return json;
+}
+
+// ───────────── Product kiezen of nieuw toevoegen ─────────────
+
+const productKinds = [['', 'Laat Weekmand raden'], ['vlees', 'Vlees en vleeswaren'], ['vis', 'Vis'], ['vega', 'Vega'],
+  ['zuivel-eieren', 'Zuivel en eieren'], ['kaas', 'Kaas'], ['brood', 'Brood'], ['ontbijt', 'Ontbijt en zoet beleg'],
+  ['groente-fruit', 'Groente en fruit'], ['aardappel', 'Aardappelen'], ['pasta-rijst', 'Pasta en rijst'], ['conserven', 'Conserven'],
+  ['kruiden-sauzen', 'Kruiden en sauzen'], ['olie-azijn', 'Olie en azijn'], ['bakken', 'Bakken'], ['diepvries', 'Diepvries'],
+  ['drinken', 'Drinken'], ['snacks', 'Snacks en snoep'], ['huishouden', 'Huishouden']];
+
+/**
+ * Een invoerveld met suggesties uit de bekende producten. Een <datalist> toont op telefoons vaak
+ * niets; deze lijst werkt overal en vindt ook een woord midden in de naam ("worst" → "Rookworst").
+ */
+function productPicker(input) {
+  input.removeAttribute('list');
+  input.setAttribute('autocomplete', 'off');
+  const list = el('div', { class: 'picker-list', role: 'listbox', 'aria-label': 'Bekende producten' });
+  list.hidden = true;
+  const wrap = el('span', { class: 'picker' });
+  input.replaceWith(wrap);
+  wrap.append(input, list);
+  const show = () => {
+    const q = input.value.trim().toLowerCase();
+    const starts = i => i.name.toLowerCase().startsWith(q);
+    const hits = q ? (S.ingredients ?? []).filter(i => i.name.toLowerCase().includes(q))
+      .sort((a, b) => starts(b) - starts(a) || a.name.localeCompare(b.name, 'nl')).slice(0, 6) : [];
+    put(list, ...hits.map(i => el('button', {
+      type: 'button', role: 'option', class: 'picker-option',
+      onmousedown: e => e.preventDefault(),
+      onclick: () => { input.value = i.name; list.hidden = true; input.focus(); },
+    }, i.name)));
+    list.hidden = !hits.length || (hits.length === 1 && hits[0].name.toLowerCase() === q);
+  };
+  input.addEventListener('input', show);
+  input.addEventListener('focus', show);
+  input.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
+  input.addEventListener('keydown', e => { if (e.key === 'Escape') list.hidden = true; });
+  return wrap;
+}
+
+/** Vraag hoe een nieuw product geteld wordt; null als je annuleert. */
+function newProductDialog(name) {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = value => { if (!done) { done = true; resolve(value); } };
+    const unit = el('select', {}, ...[['st', 'Per stuk of verpakking'], ['g', 'In gram'], ['ml', 'In milliliter']].map(([v, l]) => el('option', { value: v }, l)));
+    const kind = el('select', {}, ...productKinds.map(([v, l]) => el('option', { value: v }, l)));
+    dialog(`${name} toevoegen`, el('div', { class: 'stack' },
+      el('p', { class: 'hint' }, `Weekmand kent "${name}" nog niet. Voeg het toe als nieuw product; Weekmand onthoudt het voor de volgende keer.`),
+      el('label', {}, 'Hoe tel je het?', unit),
+      el('label', {}, 'Soort', kind),
+      el('div', { class: 'row' },
+        btn('Toevoegen', () => { finish({ unit: unit.value, ...(kind.value ? { category: kind.value } : {}) }); closeDialog(); }, 'primary'),
+        btn('Annuleren', closeDialog, 'ghost'))));
+    $('dialog').addEventListener('close', () => finish(null), { once: true });
+  });
+}
+
+/** Stuur iets met een productnaam; kent Weekmand het product niet, dan eerst vragen of het erbij moet. */
+async function withNewProduct(name, send) {
+  try {
+    return await send();
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    const create = await newProductDialog(name);
+    return create ? send(create) : null;
+  }
 }
 
 let toastTimer;
@@ -868,11 +936,13 @@ $('pantry-add').onsubmit = e => {
   const known = S.pantry.items.find(i => i.name.toLowerCase() === name.toLowerCase() || i.key === name.toLowerCase());
   if (known) { openPantry = known.key; $('pantry-add-name').value = ''; renderPantry(); return; }
   run(async () => {
-    const [r] = await api('pantry', { items: [{ name, status: 'onbekend' }] });
+    const result = await withNewProduct(name, create => api('pantry', { items: [{ name, status: 'onbekend', ...(create ? { create } : {}) }] }));
+    if (!result) return;
     $('pantry-add-name').value = '';
-    openPantry = S.ingredients.find(i => i.name === r.name)?.key ?? null;
+    openPantry = S.ingredients.find(i => i.name === result[0].name)?.key ?? null;
   });
 };
+productPicker($('pantry-add-name'));
 $('pantry-rebuild').onclick = () => {
   if (!confirm('Alle hoeveelheden vervangen door de laatste Picnic-levering?')) return;
   run(async () => {
@@ -922,17 +992,18 @@ async function handleCode(code) {
     await load();
     return;
   }
-  const name = el('input', { list: 'ingredient-list', placeholder: 'Bijv. melk', required: true, 'aria-label': 'Product' });
+  const name = el('input', { placeholder: 'Bijv. melk', required: true, 'aria-label': 'Product' });
   const pack = el('input', { type: 'number', min: '0', step: 'any', placeholder: 'optioneel', 'aria-label': 'Inhoud' });
   const unit = el('select', {}, ...['', 'g', 'kg', 'ml', 'l', 'st'].map(u => el('option', { value: u }, u || 'standaard')));
   put($('scan-result'), el('form', { class: 'stack', onsubmit: e => {
     e.preventDefault();
     run(async () => {
-      const result = await api('barcode', { code, name: name.value, ...(pack.value ? { packAmount: Number(pack.value), unit: unit.value || undefined } : {}) });
+      const result = await withNewProduct(name.value.trim(), create => api('barcode', { code, name: name.value, ...(pack.value ? { packAmount: Number(pack.value), unit: unit.value || undefined } : {}), ...(create ? { create } : {}) }));
+      if (!result) return;
       put($('scan-result'), el('p', { class: 'ok' }, `Onthouden. ${result.ingredient}: nog ${result.left} over.`));
     });
   } }, el('p', {}, `Nieuwe barcode ${code}. Welk product is dit? Weekmand onthoudt het voor de volgende keer.`),
-  el('div', { class: 'grid' }, el('label', {}, 'Product', name), el('label', {}, 'Inhoud verpakking', pack), el('label', {}, 'Eenheid', unit)),
+  el('div', { class: 'grid' }, el('label', {}, 'Product', productPicker(name)), el('label', {}, 'Inhoud verpakking', pack), el('label', {}, 'Eenheid', unit)),
   el('button', { class: 'primary' }, 'Opslaan en van voorraad halen')));
 }
 
@@ -1285,7 +1356,7 @@ function renderAh() {
     }
     if (a.unmatched?.length) {
       parts.push(el('h3', {}, 'Niet herkend'),
-        el('p', { class: 'hint' }, 'Kies het ingrediënt waar een bonregel bij hoort, of negeer hem (bijvoorbeeld keukenrol). Weekmand telt hem dan alsnog bij de voorraad en onthoudt het voor volgende bonnen.'),
+        el('p', { class: 'hint' }, 'Kies het product waar een bonregel bij hoort, of typ een nieuw product (bijvoorbeeld Efes voor EFES SUCUK). Negeer wat geen boodschap is, zoals keukenrol. Weekmand telt de regel dan alsnog bij de voorraad en onthoudt het voor volgende bonnen.'),
         ...a.unmatched.map(receiptMapRow),
         S.ai ? btn('Laat de AI zoeken', () => run(async () => {
           const r = await api('ah/match', {});
@@ -1317,13 +1388,19 @@ function renderAh() {
 
 /** Eén onbekende bonregel: koppelen aan een ingrediënt of negeren. */
 function receiptMapRow(u) {
-  const input = el('input', { list: 'ingredient-list', required: true, placeholder: 'Hoort bij…', 'aria-label': 'Ingrediënt voor ' + u.name });
+  const input = el('input', { required: true, placeholder: 'Hoort bij… (of typ een nieuw product)', 'aria-label': 'Product voor ' + u.name });
   return el('form', { class: 'map-row', onsubmit: e => {
     e.preventDefault();
-    run(async () => { await api('ah/map', { name: u.name, ingredient: input.value.trim() }); toast(`${u.name} telt voortaan als ${input.value.trim()}.`); planStale = true; });
+    const product = input.value.trim();
+    run(async () => {
+      const r = await withNewProduct(product, create => api('ah/map', { name: u.name, ingredient: product, ...(create ? { create } : {}) }));
+      if (!r) return;
+      toast(`${u.name} telt voortaan als ${S.ingredients.find(i => i.key === r.key)?.name ?? product}.`);
+      planStale = true;
+    });
   } },
   el('span', { class: 'map-name' }, u.quantity > 1 ? `${u.quantity}× ${u.name}` : u.name),
-  el('span', { class: 'map-controls' }, input,
+  el('span', { class: 'map-controls' }, productPicker(input),
     el('button', { class: 'small' }, 'Koppel'),
     btn('Negeer', () => run(async () => { await api('ah/map', { name: u.name, ingredient: null }); toast(`${u.name} wordt voortaan overgeslagen.`); }), 'small ghost')));
 }

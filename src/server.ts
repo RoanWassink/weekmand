@@ -220,7 +220,7 @@ const ui: Record<string, Handler> = {
   'ah/send': async i => app.sendToAhList({ ids: Array.isArray(i.ids) ? i.ids.map(String) : undefined, extra: Array.isArray(i.extra) ? i.extra.map(String) : [] }),
   'ah/receipts': async () => app.importAhReceipts(),
   'ah/match': async () => app.matchReceiptLines({ force: true }),
-  'ah/map': i => app.mapReceiptLine(String(i.name ?? ''), i.ingredient === null ? null : String(i.ingredient ?? '')),
+  'ah/map': i => app.mapReceiptLine(String(i.name ?? ''), i.ingredient === null ? null : String(i.ingredient ?? ''), i.create ? obj(i.create) : undefined),
   budget: i => app.budgetOverview({ period: i.period, offset: i.offset }),
   'budget/sync': async () => { const r = await app.syncSpending({ details: 12 }); await app.labelProducts().catch(() => null); return r; },
   'budget/label': async () => app.labelProducts({ force: true }),
