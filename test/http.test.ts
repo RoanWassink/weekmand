@@ -70,3 +70,18 @@ test('server: wachtwoord, API-token, CSRF en webapp', async t => {
   child.kill();
   await once(child, 'exit');
 });
+
+test('lokaal: localhost via 127.0.0.1, en in Docker alleen als de poort op 127.0.0.1 openstaat', async () => {
+  const { localRequest } = await import('../src/auth.ts');
+  assert.equal(localRequest('127.0.0.1', 'localhost:8080'), true);
+  assert.equal(localRequest('::1', '[::1]:8080'), true);
+  assert.equal(localRequest('127.0.0.1', 'weekmand.lan:8080'), false, 'ander adres in de adresbalk');
+  // Docker: het verzoek komt via de bridge (of de VM van Docker Desktop).
+  assert.equal(localRequest('172.17.0.1', 'localhost:8080'), false, 'zonder DOCKER_BIND_IP niet lokaal');
+  assert.equal(localRequest('172.17.0.1', 'localhost:8080', '127.0.0.1'), true);
+  assert.equal(localRequest('::ffff:192.168.65.1', 'localhost:8080', '127.0.0.1'), true);
+  assert.equal(localRequest('172.17.0.1', 'localhost:8080', '0.0.0.0'), false, 'poort open voor het netwerk');
+  assert.equal(localRequest('192.168.1.40', 'localhost:8080', '192.168.1.10'), false);
+  assert.equal(localRequest('172.17.0.1', '192.168.1.10:8080', '127.0.0.1'), false, 'alleen met localhost in de adresbalk');
+  assert.equal(localRequest('8.8.8.8', 'localhost:8080', '127.0.0.1'), false, 'geen publiek adres');
+});

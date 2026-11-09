@@ -147,7 +147,7 @@ Geheugen: ongeveer 50–80 MB in gebruik. Met `NODE_OPTIONS=--max-old-space-size
 docker compose up --build -d
 ```
 
-Alpine-image in twee fasen, `mem_limit: 150m`, data in het volume `weekmand`. Standaard alleen op localhost; zet `BIND_IP` en `APP_PASSWORD` voor toegang vanaf het thuisnetwerk.
+Alpine-image in twee fasen, `mem_limit: 150m`, data in het volume `weekmand`. Standaard alleen op localhost: open dan `http://localhost:8080` op dezelfde computer om Picnic, AH, de AI en Telegram te koppelen. In Docker komt elk verzoek binnen via Dockers eigen netwerk; omdat de poort alleen op die computer openstaat, geeft compose dat door (`DOCKER_BIND_IP`) en telt localhost toch als lokaal. Zet je `BIND_IP` op een adres in je thuisnetwerk (met `APP_PASSWORD`), dan vervalt dat: koppel dan eerst met de standaardinstelling en zet daarna `BIND_IP`. Koppelingen blijven in het volume bewaard.
 
 ## Veiligheid en privacy
 

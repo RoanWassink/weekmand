@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { handleAction, reasons } from './actions.ts';
 import { Weekmand } from './app.ts';
 import { Assistant } from './assistant.ts';
-import { Accounts, cookieValue, sessionDays } from './auth.ts';
+import { Accounts, cookieValue, localRequest, sessionDays } from './auth.ts';
 import { Store } from './db.ts';
 import { PICNIC_IMAGE_ORIGIN } from './shop.ts';
 import { check, Problem } from './errors.ts';
@@ -89,8 +89,7 @@ if (setupSubnet) {
   if (!setupClients.check(lanHost, 'ipv4')) throw new Error('LAN_HOST valt buiten LAN_SETUP_SUBNET.');
 }
 function local(req: IncomingMessage) {
-  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '') &&
-    /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(req.headers.host ?? '');
+  return localRequest(req.socket.remoteAddress ?? '', req.headers.host ?? '', process.env.DOCKER_BIND_IP);
 }
 /** Sleutels en wachtwoorden invoeren mag alleen via localhost of het toegestane thuisnetwerk. */
 function canConfigure(req: IncomingMessage) {
