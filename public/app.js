@@ -482,9 +482,8 @@ function scheduleCalc() {
   calcTimer = setTimeout(() => {
     if ((plan && !planStale) || !S?.shop.ready || !$('tab-cart').classList.contains('active')) return;
     // Bijwerken gebeurt stil: het oude voorstel blijft staan en knoppen blijven bruikbaar.
-    if (plan) return calculate(false, { quiet: true }).catch(e => toast(e.message, true));
-    if (busy) return scheduleCalc();
-    run(calculate, { reload: false });
+    // Altijd op de achtergrond: de knoppen blijven bruikbaar, ook als Picnic traag is.
+    calculate(false, { quiet: true }).catch(e => toast(e.message, true));
   }, plan ? 50 : 300);
 }
 
@@ -598,12 +597,21 @@ function swipeable(node, onSwipe) {
  * force: de Picnic-mand opnieuw lezen en alles opnieuw berekenen. Anders het gedeelde overzicht van
  * de server; na een wijziging in Weekmand zelf rekent die met de al gelezen mand (snel, geen Picnic).
  */
+let refreshTimer;
 async function calculate(force = false, { quiet = false } = {}) {
   const seq = ++planSeq;
   const slow = quiet ? null : setTimeout(() => toast('Bezig met berekenen… Je Picnic-mand lezen en nieuwe producten koppelen kan even duren.'), 1500);
   const result = await api(force === true ? 'plan' : 'plan/current', {}).finally(() => clearTimeout(slow));
   // Een nieuwere berekening of een nog lopende wijziging wint; die tekent zelf.
   if (seq !== planSeq || planWrites) return;
+  // De server rekent nog (Picnic lezen, producten zoeken): het huidige voorstel laten staan en zo opnieuw vragen.
+  clearTimeout(refreshTimer);
+  if (result.refreshing) {
+    if (!plan) { plan = result.plan; planStale = true; renderPlan(); loadCartLines(); }
+    else { planStale = true; if ($('plan-read')) $('plan-read').textContent = planReadText(); }
+    refreshTimer = setTimeout(() => { if (seq === planSeq) calculate(false, { quiet: true }).catch(e => toast(e.message, true)); }, 2000);
+    return;
+  }
   // Komt er hetzelfde uit, dan alleen de tijd bijwerken: de lijst springt niet en je plek blijft.
   const same = plan && planSignature(plan) === planSignature(result.plan) && $('plan-read');
   plan = result.plan;
@@ -725,7 +733,11 @@ function renderPlan() {
     el('p', { class: 'muted small' }, changes.length ? 'Nog niet doorgevoerd. Alleen deze verschillen gaan naar Picnic; wat je zelf in Picnic zet blijft staan.' : 'Alles wat nodig is zit al in je Picnic-mand. Afrekenen doe je in de Picnic-app.'),
     el('p', { class: 'muted small' }, `Voor ${plan.meals.length} maaltijden: ${plan.meals.map(m => m.name).join(', ') || 'geen'}.`),
     el('div', { class: 'row' }, el('span', { class: 'muted small grow', id: 'plan-read' }, planReadText()),
-      btn('Ververs uit Picnic', () => run(() => calculate(true), { reload: false }), 'small ghost')),
+      btn('Ververs uit Picnic', () => {
+        planStale = true;
+        $('plan-read').textContent = planReadText();
+        calculate(true, { quiet: true }).catch(e => { planStale = false; if ($('plan-read')) $('plan-read').textContent = planReadText(); toast(e.message, true); });
+      }, 'small ghost')),
     changes.length ? el('p', { class: 'hint with-icon' }, icon('swipe'), 'Veeg een regel opzij om hem deze keer over te slaan.') : null,
     changes.length ? searchBox('plan-lines', 'Zoek in het voorstel') : null,
     el('div', { id: 'plan-lines' }, ...changes.map(l => swipeable(el('div', { class: 'line' },

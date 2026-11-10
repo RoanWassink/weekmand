@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isIPv4 } from 'node:net';
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import { dirname, join } from 'node:path';
 import { handleAction, reasons } from './actions.ts';
 import { Weekmand } from './app.ts';
@@ -140,8 +141,9 @@ async function state(req: IncomingMessage) {
 type Handler = (input: Record<string, any>, req: IncomingMessage) => Promise<unknown> | unknown;
 const ui: Record<string, Handler> = {
   // "Ververs uit Picnic": mand en bezorgmomenten vers lezen.
-  plan: async () => { await app.slots(true).catch(() => []); const plan = await app.plan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
-  'plan/current': async () => { const plan = await app.currentPlan(); return { plan: app.withImages(plan), summary: planSummary(plan) }; },
+  // De webapp wacht hooguit anderhalve seconde; daarna het vorige voorstel met refreshing: true.
+  plan: async () => { const r = await app.planForUi(true); return { plan: app.withImages(r.plan), summary: planSummary(r.plan), refreshing: r.refreshing }; },
+  'plan/current': async () => { const r = await app.planForUi(false); return { plan: app.withImages(r.plan), summary: planSummary(r.plan), refreshing: r.refreshing }; },
   product: async i => app.productInfo(String(i.id ?? '')),
   apply: async i => app.applyPlan(String(i.id)),
   action: async i => handleAction(app, String(i.data)),
@@ -297,7 +299,23 @@ async function auth(action: string, req: IncomingMessage, res: ServerResponse) {
 
 // ───────────── HTTP ─────────────
 
+// Meten waar de app op wacht: trage aanvragen (meestal Picnic of de AI) en momenten waarop de
+// server helemaal vastzit (zwaar rekenwerk). Alleen het adres en de duur, geen inhoud.
+const SLOW_REQUEST_MS = Number(process.env.SLOW_REQUEST_MS || 1500);
+const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+loopDelay.enable();
+setInterval(() => {
+  const worst = loopDelay.max / 1e6;
+  if (worst > 300) console.log(`Weekmand zat ${Math.round(worst)} ms vast (de traagste keer in de afgelopen minuut).`);
+  loopDelay.reset();
+}, 60_000).unref();
+
 async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+  const started = performance.now();
+  res.once('finish', () => {
+    const ms = Math.round(performance.now() - started);
+    if (ms >= SLOW_REQUEST_MS && req.url !== '/mcp') console.log(`Traag: ${req.method} ${(req.url ?? '').split('?')[0]} ${ms} ms (status ${res.statusCode})`);
+  });
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
