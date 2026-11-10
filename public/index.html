@@ -58,14 +58,14 @@
     <h2>Boodschappen</h2>
     <div id="cart-status" class="card"></div>
 
-    <h3 class="step">Voorstel van Weekmand <span class="pill">nog niet in Picnic</span></h3>
+    <h3 class="step" id="plan-head">Voorstel van Weekmand <span class="pill">nog niet in Picnic</span></h3>
     <div id="plan"></div>
 
-    <h3 class="step">Je Picnic-mand nu <span class="pill">echt in Picnic</span></h3>
+    <h3 class="step" id="cart-head">Je Picnic-mand nu <span class="pill">echt in Picnic</span></h3>
     <div class="card" id="current-cart"><div id="cart-lines"><p class="muted small">Laden…</p></div></div>
 
     <h3 class="step">Je lijst in Weekmand</h3>
-    <p class="muted small">Extra's en vaste boodschappen tellen mee in het voorstel hierboven. Ze komen pas in Picnic als je op <b>Wijzigingen naar Picnic sturen</b> drukt.</p>
+    <p class="muted small" id="list-hint">Extra's en vaste boodschappen tellen mee in het voorstel hierboven. Ze komen pas in Picnic als je op <b>Wijzigingen naar Picnic sturen</b> drukt.</p>
     <div class="card">
       <h3>Extra deze keer</h3>
       <form id="extra-form" class="row">
@@ -211,7 +211,7 @@
 
 <nav class="tabs" id="tabs" aria-label="Hoofdmenu">
   <button data-tab="week" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Week</button>
-  <button data-tab="cart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 4h2l2.4 11h10.2L20 8H6.2"/><circle cx="9" cy="19.5" r="1.5"/><circle cx="17" cy="19.5" r="1.5"/></svg>Mand</button>
+  <button data-tab="cart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 4h2l2.4 11h10.2L20 8H6.2"/><circle cx="9" cy="19.5" r="1.5"/><circle cx="17" cy="19.5" r="1.5"/></svg><span id="cart-tab-label">Mand</span></button>
   <button data-tab="pantry"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="2.5" width="14" height="19" rx="2"/><path d="M5 10h14M8.5 6v1.5M8.5 13v2"/></svg>Voorraad</button>
   <button data-tab="budget"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v3"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M16 14h.01"/></svg>Budget</button>
   <button data-tab="more"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>Meer</button>

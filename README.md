@@ -46,7 +46,7 @@ Een volgende keer hoef je alleen `cd weekmand` en `npm start` te doen.
 Onder **Meer** in de app:
 
 - Maak een account aan.
-- **Winkel en Picnic**: meld je aan met de sms-code en vink **Sessie onthouden** aan, zodat de deadline-melding ook na een herstart werkt.
+- **Winkel en Picnic**: meld je aan met de sms-code en vink **Sessie onthouden** aan, zodat de deadline-melding ook na een herstart werkt. Geen Picnic? Kies **Zelf boodschappen doen**: dan wordt de tab Mand een boodschappenlijst (per afdeling of per gerecht) om af te vinken in de winkel.
 - **AI-aanbieder** (optioneel): Claude, OpenAI, Mistral, DeepSeek of een lokaal model.
 - **Albert Heijn** (optioneel): voor boodschappen in de winkel. Weekmand zet je boodschappen op Mijn lijst in de AH-app en telt je kassabonnen bij de voorraad.
 - **Lidl Plus** (optioneel): Weekmand leest je Lidl-kassabonnen voor het budget en de voorraad.

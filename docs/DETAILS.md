@@ -34,6 +34,12 @@ npm start
 
 Open [Weekmand](http://127.0.0.1:8080). Zonder verdere instellingen draait alles met een demowinkel, zodat je het menu, de berekening en de goedkeuring kunt uitproberen. **Mand → Bestelling afronden (demo)** doet alsof de bestelling geleverd is; de producten gaan dan in de voorraad.
 
+### Zonder Picnic: zelf boodschappen doen
+
+Onder **Meer → Winkel en Picnic** kies je **Zelf boodschappen doen**, bijvoorbeeld als je bij de Lidl of op de markt winkelt. Het menu werkt hetzelfde. In plaats van een bezorgmoment kies je een boodschappendag (standaard vandaag); menu en lijst gaan vanaf die dag een week vooruit. Er is geen deadline en geen mand.
+
+De tab **Lijst** toont wat het menu, je vaste boodschappen en je extra's nodig hebben, min wat je in huis hebt, in gewone verpakkingen en zonder prijzen. Bovenin wissel je tussen **Per afdeling** (om door de winkel te lopen) en **Per gerecht** (om te zien of je alles voor een gerecht hebt; wat je al in huis hebt staat erbij). Afvinken bewaart Weekmand op de server, dus iedereen in huis ziet dezelfde vinkjes; ze verlopen na anderhalve dag. **Kopiëren** zet de lijst als tekst klaar; met een gekoppeld AH-account kan hij ook op Mijn lijst. Afvinken telt niet bij de voorraad: dat doen je kassabonnen (AH, Lidl Plus of een foto).
+
 Instellingen kunnen in `.env` (zie `.env.example`) of in de webapp onder **Meer**. Koppelingen (Picnic, AH, AI, Telegram) beheert iedereen die is ingelogd, ook via `weekmand.local` of je telefoon; alleen het allereerste account maak je aan vanuit je eigen netwerk.
 
 ### Picnic koppelen

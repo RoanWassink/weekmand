@@ -281,7 +281,8 @@ async function load() {
 }
 
 function renderHeader() {
-  $('shop-badge').textContent = S.shop.mode === 'picnic' ? (S.shop.ready ? 'Picnic' : 'Picnic · niet aangemeld') : 'Demo';
+  $('shop-badge').textContent = S.shop.mode === 'picnic' ? (S.shop.ready ? 'Picnic' : 'Picnic · niet aangemeld') : S.shop.mode === 'self' ? 'Eigen winkel' : 'Demo';
+  $('cart-tab-label').textContent = S.shop.mode === 'self' ? 'Lijst' : 'Mand';
   const d = S.delivery;
   $('deadline').hidden = !d.cutOff;
   if (d.cutOff) {
@@ -311,7 +312,12 @@ function renderWeek() {
   // Bezorging: het hoofdblok van het scherm.
   const hero = $('delivery-card');
   const change = btn('Bezorgmoment wijzigen', chooseDelivery, 'secondary small');
-  if (!S.shop.ready) {
+  const self = S.shop.mode === 'self';
+  if (self) {
+    put(hero, el('h2', {}, d.planned && d.planned !== today() ? 'Boodschappen ' + fmtDate(d.planned) : 'Boodschappen vandaag'),
+      el('p', { class: 'hero-sub' }, `Menu en lijst voor ${fmtRange(S.menu.window.start, S.menu.window.end)}. Wat je in huis hebt, staat niet op de lijst.`),
+      btn('Boodschappendag kiezen', chooseShoppingDay, 'secondary small'));
+  } else if (!S.shop.ready) {
     put(hero, el('h2', {}, 'Weekmenu'),
       el('p', { class: 'hero-sub' }, 'Picnic is niet aangemeld. Het menu werkt wel; meld je aan onder Meer voor de echte mand en de deadline.'));
   } else if (d.next) {
@@ -334,7 +340,7 @@ function renderWeek() {
   // De week als tijdlijn, met de bezorging als markering.
   const portions = Math.round((S.household.adults + S.household.children * 0.65 + S.household.toddlers * 0.35) * 100) / 100;
   const marker = () => el('li', { class: 'marker' }, icon('truck'),
-    el('span', {}, d.next ? `Bezorging ${dayShort(S.menu.window.start)} ${timeFmt.format(new Date(d.next.windowStart))}` : `Bezorging ${fmtDate(S.menu.window.start)}`));
+    el('span', {}, self ? `Boodschappen ${fmtDate(S.menu.window.start)}` : d.next ? `Bezorging ${dayShort(S.menu.window.start)} ${timeFmt.format(new Date(d.next.windowStart))}` : `Bezorging ${fmtDate(S.menu.window.start)}`));
   const items = [];
   let marked = false;
   for (const day of S.menu.days) {
@@ -408,6 +414,20 @@ function fmtRange(from, to) {
   const day = new Intl.DateTimeFormat('nl-NL', { day: 'numeric', timeZone: 'UTC' });
   const full = new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'long', timeZone: 'UTC' });
   return f.getUTCMonth() === t.getUTCMonth() ? `${day.format(f)}–${full.format(t)}` : `${full.format(f)} – ${full.format(t)}`;
+}
+
+const today = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Amsterdam' });
+
+/** Zelf boodschappen doen: alleen een dag; menu en lijst gaan vanaf die dag. */
+function chooseShoppingDay() {
+  const d = S.delivery;
+  const dateInput = el('input', { type: 'date', min: today(), value: d.planned ?? today(), 'aria-label': 'Boodschappendag' });
+  const pick = data => { closeDialog(); run(async () => { await api(data ? 'delivery' : 'delivery/reset', data ?? {}); planStale = true; listData = null; }); };
+  dialog('Boodschappendag', el('div', { class: 'stack' },
+    el('p', { class: 'muted small' }, 'Wanneer doe je boodschappen? Menu en lijst gaan vanaf die dag, een week vooruit.'),
+    el('form', { class: 'row', onsubmit: e => { e.preventDefault(); if (dateInput.value) pick({ date: dateInput.value }); } },
+      el('span', { class: 'grow' }, dateInput), el('button', { class: 'primary' }, 'Kiezen')),
+    d.planned ? btn('Gewoon vanaf vandaag', () => pick(null), 'ghost') : null));
 }
 
 function chooseDelivery() {
@@ -675,7 +695,14 @@ let planLoading = null;
 
 function renderCart() {
   const status = $('cart-status');
-  if (!S.shop.ready) {
+  const self = S.shop.mode === 'self';
+  for (const id of ['plan-head', 'cart-head', 'current-cart']) $(id).hidden = self;
+  $('list-hint').textContent = self ? "Extra's en vaste boodschappen komen op je boodschappenlijst hierboven."
+    : "Extra's en vaste boodschappen tellen mee in het voorstel hierboven. Ze komen pas in Picnic als je op Wijzigingen naar Picnic sturen drukt.";
+  if (self) {
+    put(status, el('p', {}, el('b', {}, 'Boodschappenlijst'), ` · vanaf ${fmtDate(S.menu.window.start)}`),
+      el('p', { class: 'muted small' }, 'Wat het menu, je vaste boodschappen en je extra\'s nodig hebben, min wat je in huis hebt. Vink af in de winkel; iedereen in huis ziet dezelfde vinkjes.'));
+  } else if (!S.shop.ready) {
     put(status, el('p', {}, 'Meld je aan bij Picnic (Meer → Winkel en Picnic) of gebruik de demowinkel.'));
   } else {
     put(status, 
@@ -683,7 +710,8 @@ function renderCart() {
       el('p', { class: 'muted small' }, "Weekmand vergelijkt wat nodig is (menu, vaste boodschappen, extra's, min voorraad) met je Picnic-mand en stelt alleen de verschillen voor."));
   }
   renderPlan();
-  loadCartLines();
+  // De lijst ververst bij elke keer laden, zodat je vinkjes van anderen in huis ziet.
+  if (self) loadShoppingList(); else loadCartLines();
 
   const extras = S.order.extras;
   const skipped = S.order.skip;
@@ -713,6 +741,7 @@ function renderCart() {
 }
 
 function renderPlan() {
+  if (S?.shop.mode === 'self') return renderShoppingList();
   const area = $('plan');
   if (!plan) {
     put(area, S?.shop.ready ? el('div', { class: 'card' }, el('p', { class: 'muted' }, 'Voorstel laden…')) : null);
@@ -781,6 +810,93 @@ function budgetFill(percent) {
   const fill = el('div');
   fill.style.width = percent + '%';
   return fill;
+}
+
+// ───────────── Boodschappenlijst (zelf boodschappen doen) ─────────────
+
+let listData = null;
+let listLoading = null;
+let listView = (() => { try { return localStorage.getItem('weekmand-list-view') || 'aisle'; } catch { return 'aisle'; } })();
+const aisleLabel = key => key === 'vast' ? "Vaste boodschappen en extra's" : productKinds.find(([k]) => k === key)?.[1] ?? 'Overig';
+const aisleOrder = key => { const i = productKinds.findIndex(([k]) => k === key); return i < 0 ? 999 : i; };
+
+/** Laadt de lijst; het oude beeld blijft staan tot de nieuwe er is. */
+function loadShoppingList() {
+  listLoading ??= api('list', {}).then(data => { listData = data; renderShoppingList(); })
+    .catch(e => { if (!listData) put($('plan'), el('div', { class: 'card' }, el('p', { class: 'warn' }, e.message))); })
+    .finally(() => { listLoading = null; });
+  return listLoading;
+}
+
+function renderShoppingList() {
+  const area = $('plan');
+  if (!listData || planStale) {
+    if (!listData) put(area, el('div', { class: 'card' }, el('p', { class: 'muted' }, 'Lijst maken…')));
+    planStale = false;
+    loadShoppingList();
+    if (!listData) return;
+  }
+  const L = listData;
+  const setView = v => { listView = v; try { localStorage.setItem('weekmand-list-view', v); } catch { /* geen opslag */ } renderShoppingList(); };
+  const toggle = el('div', { class: 'segmented two', role: 'tablist', 'aria-label': 'Weergave van de lijst' },
+    el('button', { type: 'button', role: 'tab', 'aria-selected': String(listView === 'aisle'), onclick: () => setView('aisle') }, 'Per afdeling'),
+    el('button', { type: 'button', role: 'tab', 'aria-selected': String(listView === 'meal'), onclick: () => setView('meal') }, 'Per gerecht'));
+  const open = L.items.filter(i => !i.checked).length;
+  const row = (id, name, amount, checked, title) => {
+    const box = el('input', { type: 'checkbox', checked: checked || undefined, 'aria-label': name, onchange: e => checkItem(id, e.target.checked) });
+    return el('label', { class: 'list-row' + (checked ? ' done' : ''), title: title || undefined }, box, el('span', { class: 'grow' }, name), amount ? el('span', { class: 'amount' }, amount) : null);
+  };
+  const body = el('div', { class: 'card shop-list' });
+  if (!L.items.length && listView === 'aisle') body.append(el('p', { class: 'muted' }, L.meals.length ? 'Je hebt alles in huis. Niets te halen.' : 'Nog geen menu. Maak er een in de tab Week; dan komt hier wat je moet halen.'));
+  if (listView === 'aisle') {
+    const groups = Object.groupBy(L.items, i => i.category);
+    for (const key of Object.keys(groups).sort((a, b) => aisleOrder(a) - aisleOrder(b))) {
+      body.append(el('h4', {}, aisleLabel(key)), ...groups[key].map(i => row(i.id, i.name, i.amount, i.checked, i.why)));
+    }
+  } else {
+    if (!L.meals.length) body.append(el('p', { class: 'muted' }, 'Nog geen gerechten gepland voor deze week.'));
+    for (const m of L.meals) {
+      body.append(el('h4', {}, `${m.day} · ${m.name}`), ...m.ingredients.map(i => i.have
+        ? el('div', { class: 'list-row have' }, el('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'), el('span', { class: 'grow' }, i.name), el('span', { class: 'amount' }, 'in huis'))
+        : row(i.id, i.name, i.amount, i.checked)));
+    }
+    const extra = L.items.filter(i => i.category === 'vast');
+    if (extra.length) body.append(el('h4', {}, aisleLabel('vast')), ...extra.map(i => row(i.id, i.name, i.amount, i.checked, i.why)));
+  }
+  const parts = [toggle];
+  if (L.questions?.length) {
+    parts.push(el('div', { class: 'card highlight' }, el('h3', {}, 'Even checken'),
+      ...L.questions.map(q => el('div', { class: 'pantry-item' }, el('span', { class: 'grow' }, q.text),
+        btn('Ja', () => run(async () => { await api('pantry', { items: [{ name: q.key, status: 'genoeg' }] }); planStale = true; }), 'small primary'),
+        btn('Nee, op', () => run(async () => { await api('pantry', { items: [{ name: q.key, status: 'op' }] }); planStale = true; }), 'small')))));
+  }
+  parts.push(el('p', { class: 'muted small' }, L.items.length ? `${L.items.length} producten, nog ${open} te halen` : ''), body,
+    el('div', { class: 'row' },
+      L.items.length ? btn('Kopiëren', copyShoppingList, 'secondary') : null,
+      L.items.length && S.ah?.linked ? btn('Op mijn AH-lijst', () => run(ahListDialog, { reload: false }), 'secondary') : null,
+      L.items.some(i => i.checked) ? btn('Vinkjes wissen', () => run(async () => { await api('list/clear', {}); listData = null; }, { reload: false }).then(() => renderShoppingList()), 'ghost') : null));
+  put(area, ...parts);
+}
+
+/** Afvinken: meteen zichtbaar, op de achtergrond bewaard (geen knoppen die even uitgaan). */
+function checkItem(id, checked) {
+  for (const i of listData.items) if (i.id === id) i.checked = checked;
+  for (const m of listData.meals) for (const i of m.ingredients) if (i.id === id) i.checked = checked;
+  renderShoppingList();
+  api('list/check', { id, checked }).catch(e => {
+    for (const i of listData.items) if (i.id === id) i.checked = !checked;
+    for (const m of listData.meals) for (const i of m.ingredients) if (i.id === id) i.checked = !checked;
+    renderShoppingList();
+    toast(e.message, true);
+  });
+}
+
+async function copyShoppingList() {
+  const groups = Object.groupBy(listData.items.filter(i => !i.checked), i => i.category);
+  const text = Object.keys(groups).sort((a, b) => aisleOrder(a) - aisleOrder(b))
+    .map(key => `${aisleLabel(key)}\n` + groups[key].map(i => `- ${i.name}${i.amount ? ` (${i.amount})` : ''}`).join('\n')).join('\n\n');
+  try { await navigator.clipboard.writeText(text); toast('Lijst gekopieerd. Plak hem in WhatsApp of je notities.'); }
+  catch { dialog('Boodschappenlijst', el('textarea', { rows: 14, readonly: true }, text)); }
 }
 
 async function ahListDialog() {
@@ -1347,8 +1463,9 @@ function renderPicnic() {
   const s = S.shop;
   const modes = el('div', { class: 'row' },
     btn('Demowinkel', () => run(async () => { await api('shop-mode', { mode: 'mock' }); plan = null; }), s.mode === 'mock' ? 'primary small' : 'small'),
-    btn('Picnic', () => run(async () => { await api('shop-mode', { mode: 'picnic' }); plan = null; }), s.mode === 'picnic' ? 'primary small' : 'small'));
-  const parts = [el('p', { class: 'muted small' }, 'Weekmand vult alleen de mand. Afrekenen en bestellen doe je zelf in de Picnic-app.'), modes];
+    btn('Picnic', () => run(async () => { await api('shop-mode', { mode: 'picnic' }); plan = null; }), s.mode === 'picnic' ? 'primary small' : 'small'),
+    btn('Zelf boodschappen doen', () => run(async () => { await api('shop-mode', { mode: 'self' }); plan = null; listData = null; }), s.mode === 'self' ? 'primary small' : 'small'));
+  const parts = [el('p', { class: 'muted small' }, 'Met Picnic vult Weekmand alleen de mand; afrekenen en bestellen doe je zelf in de Picnic-app. Zonder Picnic kies je Zelf boodschappen doen: dan maakt Weekmand een boodschappenlijst voor de winkel (Lidl, AH, markt). De demowinkel is om uit te proberen.'), modes];
   const status = { connected: 'Aangemeld bij Picnic' + (s.remembered ? ' (sessie onthouden)' : ' (tot herstart)'), sms: 'Wacht op sms-code', disconnected: 'Niet aangemeld', expired: 'Sessie verlopen, meld je opnieuw aan' }[s.picnic];
   parts.push(el('p', {}, el('b', {}, status)));
   if (s.picnic === 'connected') {
