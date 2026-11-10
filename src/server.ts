@@ -75,7 +75,13 @@ const uiAllowed = (req: IncomingMessage) => uiUser(req) !== null;
 /** MCP, OpenAPI en Home Assistant: altijd het API-token (of het app-wachtwoord). */
 const apiAllowed = (req: IncomingMessage) => tokenOk(req) || basicOk(req);
 
-const lanHost = process.env.LAN_HOST;
+/**
+ * LAN_LISTEN=uit zet het luisteren op het thuisnetwerk tijdelijk uit, zonder LAN_HOST weg te halen:
+ * Weekmand is dan alleen via 127.0.0.1 bereikbaar. Standaard aan.
+ */
+const lanListen = !/^(uit|off|false|0|nee|no)$/i.test(process.env.LAN_LISTEN?.trim() ?? '');
+const lanHost = lanListen ? process.env.LAN_HOST : undefined;
+if (!lanListen && process.env.LAN_HOST) console.log('LAN_LISTEN staat uit: Weekmand luistert niet op ' + process.env.LAN_HOST + '.');
 if (lanHost && (!isIPv4(lanHost) || !/^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(lanHost) || !password?.trim())) {
   throw new Error('LAN_HOST vereist een privé-IPv4-adres en een ingesteld APP_PASSWORD.');
 }
