@@ -16,6 +16,7 @@ services:
       NTFY_URL: ${NTFY_URL:-}
       MQTT_URL: ${MQTT_URL:-}
       CUTOFF_WARNING_HOURS: ${CUTOFF_WARNING_HOURS:-4}
+      LIDL_APP_VERSION: ${LIDL_APP_VERSION:-}
     volumes:
       - weekmand:/data
     mem_limit: 150m

@@ -33,7 +33,7 @@ test('optellen: categorieën, nodig of extra, kosten en wat nog niet uitgesplits
   const label = (name: string) => /melk/i.test(name) ? { category: 'zuivel', kind: 'nodig', by: 'catalogus' } as const : /chips/i.test(name) ? { category: 'snacks', kind: 'extra', by: 'regel' } as const : /pils/i.test(name) ? { category: 'alcohol', kind: 'extra', by: 'regel' } as const : null;
   const s = summarize(spends, label);
   assert.equal(s.totalCents, 3000);
-  assert.deepEqual(s.bySource, { picnic: 1500, ah: 1200, manual: 300 });
+  assert.deepEqual(s.bySource, { picnic: 1500, ah: 1200, lidl: 0, manual: 300 });
   assert.equal(s.savingsCents, 120 + 100, 'Picnic-actiekorting en AH-bonus');
   const cat = Object.fromEntries(s.categories.map(c => [c.key, c.cents]));
   assert.deepEqual(cat, { zuivel: 230, snacks: 199, overig: 871, alcohol: 550, kosten: -50 + 200, 'nog-niet': 700, 'groente-fruit': 300 });
@@ -217,7 +217,7 @@ test('budget: totalen in één keer, regels rustig aan, overzicht per maand', as
   assert.equal(month.range.label, 'november 2026');
   assert.equal(month.totalCents, 230 + 199 + 99 + 650, 'geannuleerde bestelling telt niet; bezorgkosten wel');
   assert.equal(month.savingsCents, 50);
-  assert.deepEqual(month.bySource, { picnic: 528, ah: 650, manual: 0 });
+  assert.deepEqual(month.bySource, { picnic: 528, ah: 650, lidl: 0, manual: 0 });
   assert.equal(month.categories.find(c => c.key === 'kosten')?.cents, 99);
   assert.equal(month.categories.find(c => c.key === 'alcohol')?.cents, 550, 'pils via de vaste regels');
   assert.equal(month.categories.find(c => c.key === 'zuivel')?.cents, 230, 'melk via de catalogus');

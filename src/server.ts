@@ -126,7 +126,7 @@ async function state(req: IncomingMessage) {
   return {
     version, canConfigure: configure, household: app.household, user: uiUser(req), accounts: accounts.list(),
     shop: { mode: app.shopMode, label: app.shop.label, ready: app.shop.ready(), picnic: app.picnic.status, remembered: app.picnic.remembered },
-    ah: app.ahStatus(), ai: assistant.status(), menu, delivery, pantry,
+    ah: app.ahStatus(), lidl: app.lidlStatus(), ai: assistant.status(), menu, delivery, pantry,
     order: app.order, regulars: app.regulars(), links: app.shopMode === 'picnic' ? app.links() : [],
     suggestions: app.suggestions(), rules: app.avoid.map(r => app.describeRule(r)),
     notices: store.get<StoredNotice[]>('notices', []).slice(0, 10),
@@ -222,6 +222,9 @@ const ui: Record<string, Handler> = {
   'ah/send': async i => app.sendToAhList({ ids: Array.isArray(i.ids) ? i.ids.map(String) : undefined, extra: Array.isArray(i.extra) ? i.extra.map(String) : [] }),
   'ah/receipts': async () => app.importAhReceipts(),
   'ah/match': async () => app.matchReceiptLines({ force: true }),
+  'lidl/link': async (i, req) => { requireConfigure(req); return app.linkLidl(String(i.code ?? '')); },
+  'lidl/unlink': (_i, req) => { requireConfigure(req); app.unlinkLidl(); return {}; },
+  'lidl/receipts': async () => app.importLidlReceipts(),
   'ah/map': i => app.mapReceiptLine(String(i.name ?? ''), i.ingredient === null ? null : String(i.ingredient ?? ''), i.create ? obj(i.create) : undefined),
   budget: i => app.budgetOverview({ period: i.period, offset: i.offset }),
   'budget/sync': async () => { const r = await app.syncSpending({ details: 12 }); await app.labelProducts().catch(() => null); return r; },

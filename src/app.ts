@@ -14,12 +14,14 @@ import type { Shop } from './shop.ts';
 import { addDays, dayName, isoWeek, localDate, weekday, weekdays } from './time.ts';
 import type { AvoidRule, BaseUnit, Category, DeliverySlot, Household, IngredientDef, Meal, PantryItem, Recipe, ShopCart, ShopProduct } from './types.ts';
 import { convert, euro, formatAmount, packAmount, parseUnitQuantity, toBase } from './units.ts';
-import { adjustmentLine, bonusPerLine, budgetCategories, budgetFor, categoryFromCatalog, categoryKeys, kindKeys, kindOf, labelKey, matchDiscounts, periodRange, priceChanges, ruleCategory, summarize, toCsv } from './budget.ts';
-import type { BudgetCategory, Period, ProductLabel, ReceiptPhoto, Spend, SpendKind, SpendLine, SpendSource } from './budget.ts';
+import { adjustmentLine, bonusPerLine, budgetCategories, budgetFor, categoryFromCatalog, categoryKeys, kindKeys, kindOf, labelKey, matchDiscounts, periodRange, priceChanges, ruleCategory, shopName, summarize, toCsv } from './budget.ts';
+import type { BudgetCategory, Period, ProductLabel, ReceiptPhoto, Spend, SpendDiscount, SpendKind, SpendLine, SpendSource } from './budget.ts';
 import type { ImageInput } from './ai.ts';
 import { importPicnicRecipes } from './picnic-recipes.ts';
 import { AH_LOGIN_URL, AlbertHeijn } from './ah.ts';
 import type { AhDiscount, AhReceiptLine } from './ah.ts';
+import { Lidl } from './lidl.ts';
+import type { LidlLine } from './lidl.ts';
 import { extractRecipe, fetchPage, previewRecipe, recipeFromText } from './recipe-import.ts';
 import type { Preview } from './recipe-import.ts';
 
@@ -92,6 +94,7 @@ export class Weekmand {
   readonly mock: MockShop;
   readonly picnic: PicnicShop;
   readonly ah: AlbertHeijn;
+  readonly lidl: Lidl;
   readonly events = new EventEmitter();
   now: () => number;
   #slots: { at: number; slots: DeliverySlot[] } | null = null;
@@ -109,6 +112,7 @@ export class Weekmand {
   #snapshot = false;
   #planRuns = 0;
   #ahImport: Promise<{ receipts: AhReceiptLog[] }> | null = null;
+  #lidlImport: Promise<{ receipts: AhReceiptLog[] }> | null = null;
   /** Koppelt onbekende bonregels met de AI; gezet door de assistent als er een AI gekoppeld is. */
   receiptMatcher?: ReceiptMatcher;
   /** Deelt producten in voor het budget (categorie, nodig of extra); gezet door de assistent. */
@@ -123,7 +127,7 @@ export class Weekmand {
 
   readonly shared: SharedProducts;
 
-  constructor(options: { store: Store; secrets: Secrets; picnic?: PicnicShop; ah?: AlbertHeijn; now?: () => number; shared?: SharedProducts }) {
+  constructor(options: { store: Store; secrets: Secrets; picnic?: PicnicShop; ah?: AlbertHeijn; lidl?: Lidl; now?: () => number; shared?: SharedProducts }) {
     this.store = options.store;
     this.shared = options.shared ?? loadSharedProducts();
     this.secrets = options.secrets;
@@ -140,6 +144,10 @@ export class Weekmand {
     // De 12 uur rust na een weigering door AH geldt ook na een herstart.
     this.ah.pausedUntil = this.store.get<number>('ahPausedUntil', 0);
     this.ah.onPause = until => this.store.set('ahPausedUntil', until);
+    this.lidl = options.lidl ?? new Lidl(this.secrets, fetch, () => this.now());
+    this.lidl.onExpired = () => this.notify({ text: 'De koppeling met je Lidl Plus-account is verlopen. Koppel opnieuw in Weekmand (Meer → Lidl Plus) om je Lidl-bonnen te laten meetellen.', key: 'lidl-expired-' + localDate(this.now()) });
+    this.lidl.pausedUntil = this.store.get<number>('lidlPausedUntil', 0);
+    this.lidl.onPause = until => this.store.set('lidlPausedUntil', until);
     this.events.on('change', () => {
       this.#generation++;
       // De bewaarde mandberekening klopt niet meer.
@@ -1361,7 +1369,7 @@ export class Weekmand {
       linked: this.ah.linked, linkedAt: this.ah.linkedAt, loginUrl: AH_LOGIN_URL,
       lastSync: this.store.get<number>('ahLastSync', 0) || null,
       receipts: this.store.get<AhReceiptLog[]>('ahReceiptLog', []).slice(0, 5),
-      unmatched: this.unmatchedReceiptLines(),
+      unmatched: this.unmatchedReceiptLines('ah'),
     };
   }
 
@@ -1376,6 +1384,94 @@ export class Weekmand {
   unlinkAh() {
     this.ah.unlink();
     this.changed();
+  }
+
+  // ───────────── Lidl Plus: kassabonnen ─────────────
+
+  lidlStatus() {
+    const linked = this.lidl.linked;
+    return {
+      linked, linkedAt: this.lidl.linkedAt, loginUrl: linked ? null : this.lidl.loginUrl(),
+      lastSync: this.store.get<number>('lidlLastSync', 0) || null,
+      receipts: this.store.get<AhReceiptLog[]>('lidlReceiptLog', []).slice(0, 5),
+      unmatched: this.unmatchedReceiptLines('lidl'),
+    };
+  }
+
+  async linkLidl(text: string) {
+    await this.lidl.link(text);
+    // Zoals bij AH: bonnen van de afgelopen drie dagen tellen bij de voorraad; het budget krijgt ze allemaal.
+    if (!this.store.get<string | null>('lidlSince', null)) this.store.set('lidlSince', addDays(localDate(this.now()), -3));
+    this.changed();
+    return this.lidlStatus();
+  }
+
+  unlinkLidl() {
+    this.lidl.unlink();
+    this.changed();
+  }
+
+  /** Nieuwe Lidl-bonnen ophalen en de producten bij de voorraad tellen (elke bon één keer). */
+  importLidlReceipts() {
+    this.#lidlImport ??= this.#importLidlReceipts().finally(() => { this.#lidlImport = null; });
+    return this.#lidlImport;
+  }
+
+  async #importLidlReceipts() {
+    check(this.lidl.linked, 'Koppel eerst je Lidl Plus-account (Meer → Lidl Plus).', 409);
+    const since = this.store.get<string | null>('lidlSince', null) ?? addDays(localDate(this.now()), -3);
+    const applied = new Set(this.store.get<string[]>('lidlAppliedReceipts', []));
+    const { tickets } = await this.lidl.tickets(1);
+    const fresh = tickets.filter(t => t.date && !applied.has(t.id) && t.date >= since).reverse().slice(0, 5);
+    const done: AhReceiptLog[] = [];
+    for (const ticket of fresh) {
+      if (done.length && this.searchPause) await new Promise(r => setTimeout(r, this.searchPause));
+      const detail = await this.lidl.ticket(ticket.id);
+      const date = detail.date || ticket.date;
+      const totalCents = detail.totalCents ?? ticket.totalCents;
+      // Al als foto ingevoerd: dan staan de producten al in de voorraad (of bewust niet).
+      const photo = totalCents !== null && this.#lidlPhoto(date, totalCents);
+      this.#saveLidlSpend(ticket.id, date, totalCents, detail.lines);
+      const result = photo ? { counted: [] as string[], unmatched: [] as string[] }
+        : this.#addBought(detail.lines.map(l => ({ name: l.name, quantity: l.weight ? 1 : l.quantity, amount: null })));
+      applied.add(ticket.id);
+      this.store.set('lidlAppliedReceipts', [...applied].slice(-200));
+      done.unshift({ id: ticket.id, date, total: totalCents === null ? null : totalCents / 100, ...result });
+      this.store.update<AhReceiptLog[]>('lidlReceiptLog', [], log => [done[0], ...log].slice(0, 10));
+    }
+    this.store.set('lidlLastSync', this.now());
+    if (!done.length) return { receipts: done };
+    if (done.some(r => r.unmatched.length)) await this.matchReceiptLines().catch(error => console.error('Bonregels koppelen:', (error as Error).message));
+    this.changed();
+    const log = this.store.get<AhReceiptLog[]>('lidlReceiptLog', []);
+    return { receipts: done.map(d => log.find(l => l.id === d.id) ?? d) };
+  }
+
+  /** Een foto van dezelfde Lidl-bon (dag en bedrag), ingevoerd vóór de koppeling. */
+  #lidlPhoto(date: string, totalCents: number) {
+    return this.store.spends(date, date).find(s => s.source === 'manual' && /lidl/i.test(s.shop ?? '') && Math.abs(s.totalCents - totalCents) <= 1) ?? null;
+  }
+
+  /** Een nieuwe Lidl-bon in het uitgavenboek: dezelfde bon als foto telt dan niet meer mee. */
+  #excludeLidlPhoto(date: string, totalCents: number) {
+    const photo = this.#lidlPhoto(date, totalCents);
+    if (photo && !photo.excluded) this.store.saveSpend({ ...photo, excluded: true, note: [photo.note, 'staat ook in Lidl Plus'].filter(Boolean).join('; ') });
+  }
+
+  /** Een Lidl-bon in het uitgavenboek; de kortingen horen bij het artikel erboven. */
+  #saveLidlSpend(ticketId: string, date: string, totalCents: number | null, lines: LidlLine[]) {
+    const id = 'lidl:' + ticketId;
+    const prev = this.store.spend(id);
+    const mapped: SpendLine[] = [];
+    const discounts: SpendDiscount[] = [];
+    for (const l of lines) {
+      const kg = l.weight ? l.quantity : 0;
+      const index = mapped.push({ name: l.name, quantity: l.weight ? 1 : l.quantity, cents: l.cents, ...(kg ? { pack: `${String(Math.round(kg * 1000) / 1000).replace('.', ',')} kg` } : {}) }) - 1;
+      for (const d of l.discounts) discounts.push({ name: d.name, cents: d.cents, line: index });
+    }
+    const total = totalCents ?? prev?.totalCents ?? mapped.reduce((sum, l) => sum + l.cents, 0) + discounts.reduce((sum, d) => sum + d.cents, 0);
+    if (!prev) this.#excludeLidlPhoto(date, total);
+    this.store.saveSpend({ ...prev, id, source: 'lidl', date, totalCents: total, lines: mapped, sized: true, discounts });
   }
 
   /**
@@ -1473,10 +1569,11 @@ export class Weekmand {
     return `${quantity}× ${name} → ${def.name}`;
   }
 
-  /** Onbekende bonregels uit de recente bonnen, één keer per naam. */
-  unmatchedReceiptLines() {
+  /** Onbekende bonregels uit de recente bonnen (AH, Lidl of allebei), één keer per naam. */
+  unmatchedReceiptLines(source?: 'ah' | 'lidl') {
     const seen = new Map<string, { name: string; quantity: number }>();
-    for (const entry of this.store.get<AhReceiptLog[]>('ahReceiptLog', [])) {
+    const logs = source ? [source + 'ReceiptLog'] : ['ahReceiptLog', 'lidlReceiptLog'];
+    for (const entry of logs.flatMap(key => this.store.get<AhReceiptLog[]>(key, []))) {
       for (const text of entry.unmatched) {
         const m = /^(\d+)× (.+)$/.exec(text);
         const name = m ? m[2] : text;
@@ -1535,7 +1632,12 @@ export class Weekmand {
 
   /** Onbekende regels in het logboek die inmiddels gekoppeld zijn alsnog bij de voorraad tellen. */
   #recountReceiptLog() {
-    const log = this.store.get<AhReceiptLog[]>('ahReceiptLog', []);
+    for (const key of ['ahReceiptLog', 'lidlReceiptLog']) this.#recount(key);
+  }
+
+  #recount(key: string) {
+    const log = this.store.get<AhReceiptLog[]>(key, []);
+    if (!log.length) return;
     this.store.tx(() => {
       for (const entry of log) {
         const still: string[] = [];
@@ -1548,7 +1650,7 @@ export class Weekmand {
         }
         entry.unmatched = still;
       }
-      this.store.set('ahReceiptLog', log);
+      this.store.set(key, log);
     });
   }
 
@@ -1690,6 +1792,33 @@ export class Weekmand {
         await this.#lookupAhSizes(yearAgo, pause);
       } catch (error) { result.errors.push('AH: ' + (error as Error).message); }
     }
+    if (this.lidl.linked) {
+      try {
+        const index = this.store.spendIndex('lidl');
+        const state = this.store.get<{ page?: number; done?: boolean }>('lidlBackfill', {});
+        // Elke keer de nieuwste pagina, en zolang het terugzoeken niet klaar is één oudere.
+        for (const page of [1, ...(state.done ? [] : [state.page ?? 2])]) {
+          await pause();
+          const { tickets, more } = await this.lidl.tickets(page);
+          let fresh = 0;
+          for (const t of tickets) {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(t.date) || t.date < cutoff || t.totalCents === null || index.has('lidl:' + t.id)) continue;
+            this.#excludeLidlPhoto(t.date, t.totalCents);
+            this.store.saveSpend({ id: 'lidl:' + t.id, source: 'lidl', date: t.date, totalCents: t.totalCents });
+            index.set('lidl:' + t.id, { date: t.date, detailed: false, discounts: false, sized: false });
+            result.added++;
+            fresh++;
+          }
+          if (page > 1) this.store.set('lidlBackfill', { page: page + 1, done: !more || !fresh || tickets.some(t => t.date < cutoff) });
+        }
+        for (const [id, v] of missing('lidl', Math.max(1, Math.ceil(details * 3 / 4)))) {
+          await pause();
+          const d = await this.lidl.ticket(id.slice('lidl:'.length));
+          this.#saveLidlSpend(id.slice('lidl:'.length), v.date, d.totalCents, d.lines);
+          result.detailed++;
+        }
+      } catch (error) { result.errors.push('Lidl: ' + (error as Error).message); }
+    }
     this.store.set('spendSync', { at: this.now(), errors: result.errors });
     return result;
   }
@@ -1783,7 +1912,7 @@ export class Weekmand {
       priceChanges: priceChanges(this.store.spends(addDays(range.end, -365), range.end).filter(s => !s.excluded), this.#packOf()).slice(0, 10),
       purchases: [...spends].reverse().map(s => ({
         id: s.id, source: s.source, date: s.date, totalCents: s.totalCents, detailed: !!s.lines, lines: s.lines?.length ?? 0,
-        shop: s.source === 'picnic' ? 'Picnic' : s.source === 'ah' ? 'Albert Heijn' : s.shop ?? 'Overig', note: s.note ?? null, category: s.category ?? null, excluded: !!s.excluded,
+        shop: shopName(s), note: s.note ?? null, category: s.category ?? null, excluded: !!s.excluded,
       })),
       categoryList: budgetCategories.map(c => ({ key: c.key, label: c.label, kind: c.kind })),
       sync: { at: sync?.at ?? null, errors: sync?.errors ?? [], pending: index.filter(v => !v.detailed).length, total: index.length, sources: { picnic: this.picnic.ready(), ah: this.ah.linked } },
@@ -1921,7 +2050,7 @@ export class Weekmand {
   /** Een aankoop op dezelfde dag met hetzelfde bedrag (bijv. een AH-bon die ook uit de app komt). */
   #sameSpend(date: string, totalCents: number) {
     const s = this.store.spends(date, date).find(x => Math.abs(x.totalCents - totalCents) <= 1);
-    return s ? { id: s.id, shop: s.source === 'picnic' ? 'Picnic' : s.source === 'ah' ? 'Albert Heijn' : s.shop ?? 'Overig', date: s.date, totalCents: s.totalCents } : null;
+    return s ? { id: s.id, shop: shopName(s), date: s.date, totalCents: s.totalCents } : null;
   }
 
   /** De gecontroleerde bon opslaan; met pantry ook de producten bij de voorraad tellen. */

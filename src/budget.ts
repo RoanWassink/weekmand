@@ -4,7 +4,7 @@ import type { Category } from './types.ts';
 import { addDays, isoWeek, weekday } from './time.ts';
 import { parseUnitQuantity } from './units.ts';
 
-export type SpendSource = 'picnic' | 'ah' | 'manual';
+export type SpendSource = 'picnic' | 'ah' | 'lidl' | 'manual';
 /**
  * Eén regel van een aankoop. `pack` is de verpakking zoals de winkel die noemt ("300 gram");
  * `productId` het AH-product van een bonregel, waarmee Weekmand de maat opzoekt.
@@ -175,7 +175,7 @@ export type Summary = {
 };
 
 export function summarize(spends: Spend[], label: (name: string) => ProductLabel | null): Summary {
-  const bySource: Record<SpendSource, number> = { picnic: 0, ah: 0, manual: 0 };
+  const bySource: Record<SpendSource, number> = { picnic: 0, ah: 0, lidl: 0, manual: 0 };
   const cats = new Map<string, number>();
   const kinds = new Map<SpendKind, number>();
   const products = new Map<string, Summary['products'][number]>();
@@ -286,6 +286,7 @@ export function priceChanges(spends: Spend[], packOf: (line: SpendLine) => strin
 export function shopName(s: Spend) {
   if (s.source === 'picnic') return 'Picnic';
   if (s.source === 'ah' || /^(ah|albert ?heijn)\b/i.test(s.shop ?? '')) return 'Albert Heijn';
+  if (s.source === 'lidl' || /^lidl\b/i.test(s.shop ?? '')) return 'Lidl';
   return s.shop?.trim() || 'Overig';
 }
 

@@ -940,23 +940,36 @@ function renderPantry() {
   put($('pantry-menu'), menu.map(pantryRow));
   put($('pantry-other'), other.length ? other.map(pantryRow) : el('p', { class: 'hint empty' }, 'Nog niets bijgehouden buiten het menu.'));
   put($('ingredient-list'), S.ingredients.map(i => el('option', { value: i.name })));
-  $('ah-receipts-action').hidden = !S.ah?.linked;
+  $('ah-receipts-action').hidden = !S.ah?.linked && !S.lidl?.linked;
   applyListSearch('pantry-menu');
   applyListSearch('pantry-other');
   if ($('tab-pantry').classList.contains('active')) loadPlanQuietly();
 }
 
-function fetchReceipts() {
+/** Nieuwe bonnen van AH en Lidl (wat gekoppeld is). Gaat er één mis, dan komt de ander toch binnen. */
+function fetchReceipts(only) {
   run(async () => {
-    const { receipts } = await api('ah/receipts', {});
+    const sources = [['ah', 'ah/receipts', 'Albert Heijn'], ['lidl', 'lidl/receipts', 'Lidl Plus']].filter(([key]) => S[key]?.linked && (!only || only === key));
+    const receipts = [];
+    const failed = [];
+    const where = [];
+    for (const [, path, label] of sources) {
+      try {
+        const r = (await api(path, {})).receipts;
+        receipts.push(...r);
+        if (r.some(x => x.unmatched.length)) where.push(label);
+      } catch (e) { failed.push(`${label}: ${e.message}`); }
+    }
     const counted = receipts.reduce((n, r) => n + r.counted.length, 0);
     const unmatched = receipts.reduce((n, r) => n + r.unmatched.length, 0);
-    toast(!receipts.length ? 'Geen nieuwe kassabonnen.'
-      : `${receipts.length} ${receipts.length === 1 ? 'kassabon' : 'kassabonnen'}: ${counted} producten bij de voorraad geteld${unmatched ? `, ${unmatched} niet herkend (zie Meer → Albert Heijn)` : ''}.`);
+    const text = !receipts.length ? 'Geen nieuwe kassabonnen.'
+      : `${receipts.length} ${receipts.length === 1 ? 'kassabon' : 'kassabonnen'}: ${counted} producten bij de voorraad geteld${unmatched ? `, ${unmatched} niet herkend (zie Meer → ${where.join(' en ')})` : ''}.`;
+    if (failed.length && !receipts.length) throw new Error(failed.join(' '));
+    toast(failed.length ? `${text} ${failed.join(' ')}` : text, !!failed.length);
     planStale = true;
   });
 }
-$('ah-receipts').onclick = fetchReceipts;
+$('ah-receipts').onclick = () => fetchReceipts();
 
 $('pantry-add').onsubmit = e => {
   e.preventDefault();
@@ -1312,6 +1325,7 @@ function renderMore() {
   renderAccounts();
   renderPicnic();
   renderAh();
+  renderLidl();
   renderAI();
   renderTelegram();
   renderIntegrations();
@@ -1376,26 +1390,9 @@ function renderAh() {
   if (a.linked) {
     parts.push(el('p', {}, el('b', {}, 'Gekoppeld'), a.linkedAt ? ` sinds ${fmtDate(a.linkedAt.slice(0, 10))}` : ''),
       el('p', { class: 'muted small' }, (a.lastSync ? `Kassabonnen laatst opgehaald ${dateFmt.format(new Date(a.lastSync))} ${timeFmt.format(new Date(a.lastSync))}. ` : '') + 'Weekmand kijkt elke vier uur naar nieuwe bonnen.'));
-    if (a.receipts.length) {
-      parts.push(el('h3', {}, 'Laatste kassabonnen'), ...a.receipts.map(r => el('details', { class: 'disclosure' },
-        el('summary', {}, `${fmtDate(r.date.slice(0, 10))}${r.total !== null ? ' · ' + money(Math.round(r.total * 100)) : ''} · ${r.counted.length} geteld${r.unmatched.length ? ` · ${r.unmatched.length} niet herkend` : ''}`),
-        ...r.counted.map(t => el('p', { class: 'small' }, t)),
-        ...r.unmatched.map(t => el('p', { class: 'small muted' }, `Niet herkend: ${t}`)),
-        ...(r.ignored ?? []).map(t => el('p', { class: 'small muted' }, `Overgeslagen (geen boodschap): ${t}`)))));
-    }
-    if (a.unmatched?.length) {
-      // De AI-knop staat bóven de regels, los van de invoervelden, zodat je hem niet raakt als je een veld aantikt.
-      parts.push(el('h3', {}, 'Niet herkend'),
-        el('p', { class: 'hint' }, 'Kies het product waar een bonregel bij hoort, of typ een nieuw product (bijvoorbeeld Efes voor EFES SUCUK). Negeer wat geen boodschap is, zoals keukenrol. Weekmand telt de regel dan alsnog bij de voorraad en onthoudt het voor volgende bonnen.'),
-        S.ai ? el('div', { class: 'row ai-match' }, btn('Laat de AI alles zoeken', () => run(async () => {
-          const r = await api('ah/match', {});
-          toast(r.matched.length ? `De AI heeft ${r.matched.length} ${r.matched.length === 1 ? 'regel' : 'regels'} gekoppeld${r.unknown.length ? `; ${r.unknown.length} bleef onbekend` : ''}.` : 'De AI herkende geen van deze regels.');
-          planStale = true;
-        }), 'small secondary')) : el('p', { class: 'hint' }, 'Met een gekoppelde AI (Meer → AI-aanbieder) zoekt Weekmand deze regels zelf op.'),
-        el('div', { class: 'map-list' }, ...a.unmatched.map(receiptMapRow)));
-    }
+    parts.push(...receiptParts(a));
     parts.push(el('div', { class: 'row' },
-      btn('Kassabonnen ophalen', fetchReceipts, 'small'),
+      btn('Kassabonnen ophalen', () => fetchReceipts('ah'), 'small'),
       S.canConfigure ? btn('Ontkoppelen', () => { if (confirm('AH-account ontkoppelen? Weekmand vergeet de toegang; je lijst en bonnen bij AH blijven staan.')) run(() => api('ah/unlink', {})); }, 'small danger') : null));
   } else if (!S.canConfigure) {
     parts.push(el('p', { class: 'muted small' }, 'Koppelen kan alleen via localhost of het toegestane thuisnetwerk.'));
@@ -1414,6 +1411,60 @@ function renderAh() {
     } }, code, el('button', { class: 'primary' }, 'Koppelen')));
   }
   put($('ah'), ...parts);
+}
+
+/** De laatste bonnen en de regels die Weekmand niet herkende (AH en Lidl). */
+function receiptParts(a) {
+  const parts = [];
+  if (a.receipts.length) {
+    parts.push(el('h3', {}, 'Laatste kassabonnen'), ...a.receipts.map(r => el('details', { class: 'disclosure' },
+      el('summary', {}, `${fmtDate(r.date.slice(0, 10))}${r.total !== null ? ' · ' + money(Math.round(r.total * 100)) : ''} · ${r.counted.length} geteld${r.unmatched.length ? ` · ${r.unmatched.length} niet herkend` : ''}`),
+      ...r.counted.map(t => el('p', { class: 'small' }, t)),
+      ...r.unmatched.map(t => el('p', { class: 'small muted' }, `Niet herkend: ${t}`)),
+      ...(r.ignored ?? []).map(t => el('p', { class: 'small muted' }, `Overgeslagen (geen boodschap): ${t}`)))));
+  }
+  if (a.unmatched?.length) {
+    // De AI-knop staat bóven de regels, los van de invoervelden, zodat je hem niet raakt als je een veld aantikt.
+    parts.push(el('h3', {}, 'Niet herkend'),
+      el('p', { class: 'hint' }, 'Kies het product waar een bonregel bij hoort, of typ een nieuw product (bijvoorbeeld Efes voor EFES SUCUK). Negeer wat geen boodschap is, zoals keukenrol. Weekmand telt de regel dan alsnog bij de voorraad en onthoudt het voor volgende bonnen.'),
+      S.ai ? el('div', { class: 'row ai-match' }, btn('Laat de AI alles zoeken', () => run(async () => {
+        const r = await api('ah/match', {});
+        toast(r.matched.length ? `De AI heeft ${r.matched.length} ${r.matched.length === 1 ? 'regel' : 'regels'} gekoppeld${r.unknown.length ? `; ${r.unknown.length} bleef onbekend` : ''}.` : 'De AI herkende geen van deze regels.');
+        planStale = true;
+      }), 'small secondary')) : el('p', { class: 'hint' }, 'Met een gekoppelde AI (Meer → AI-aanbieder) zoekt Weekmand deze regels zelf op.'),
+      el('div', { class: 'map-list' }, ...a.unmatched.map(receiptMapRow)));
+  }
+  return parts;
+}
+
+function renderLidl() {
+  const a = S.lidl;
+  if (!a) return;
+  const parts = [el('p', { class: 'muted small' }, 'Je Lidl-bonnen uit de Lidl Plus-app. Weekmand zet ze in het budget en telt de producten bij de voorraad. Weekmand leest alleen je bonnen, krijgt je wachtwoord niet te zien en gebruikt geen coupons.')];
+  if (a.linked) {
+    parts.push(el('p', {}, el('b', {}, 'Gekoppeld'), a.linkedAt ? ` sinds ${fmtDate(a.linkedAt.slice(0, 10))}` : ''),
+      el('p', { class: 'muted small' }, (a.lastSync ? `Bonnen laatst opgehaald ${dateFmt.format(new Date(a.lastSync))} ${timeFmt.format(new Date(a.lastSync))}. ` : '') + 'Weekmand kijkt elke vier uur naar nieuwe bonnen. Oudere bonnen komen in de loop van een paar dagen in het budget.'),
+      ...receiptParts(a),
+      el('div', { class: 'row' },
+        btn('Bonnen ophalen', () => fetchReceipts('lidl'), 'small'),
+        S.canConfigure ? btn('Ontkoppelen', () => { if (confirm('Lidl Plus ontkoppelen? Weekmand vergeet de toegang; je bonnen in het budget blijven staan.')) run(() => api('lidl/unlink', {})); }, 'small danger') : null));
+  } else if (!S.canConfigure) {
+    parts.push(el('p', { class: 'muted small' }, 'Log eerst in om Lidl Plus te koppelen.'));
+  } else {
+    const code = el('input', { autocomplete: 'off', required: true, placeholder: 'com.lidlplus.app://callback?code=…', 'aria-label': 'Inlogcode van Lidl' });
+    parts.push(el('ol', { class: 'steps' },
+      el('li', {}, 'Gebruik Chrome of Edge op een computer. ', el('a', { href: a.loginUrl, target: '_blank', rel: 'noopener noreferrer' }, 'Open de inlogpagina van Lidl'), '; die opent in een nieuw tabblad. Op een telefoon met de Lidl Plus-app werkt dit niet: de app vangt de code dan zelf op.'),
+      el('li', {}, 'Druk in dát tabblad op F12 en kies het tabblad Network (Netwerk). Zet een vinkje bij Preserve log (Logboek behouden) en typ ', el('code', {}, 'callback'), ' in het filterveld. Doe dit vóórdat je inlogt.'),
+      el('li', {}, 'Log in met je Lidl Plus-account en vul de code in die je krijgt. Daarna gebeurt er niets meer of zie je een foutmelding. Dat is normaal.'),
+      el('li', {}, 'Klik in de lijst op de regel die met ', el('code', {}, 'callback'), ' begint (status 302). Onder Headers → Response Headers staat ', el('code', {}, 'location: com.lidlplus.app://callback?code=…'), '.'),
+      el('li', {}, 'Kopieer die waarde en plak hem hieronder. Doe dit binnen een paar minuten: de code werkt één keer.')),
+    el('p', { class: 'hint' }, 'Staat er in het tabblad Console een rode regel met com.lidlplus.app://callback?code=…? Die kun je ook plakken. Lukt het niet, open de inlogpagina dan opnieuw via de link hierboven.'),
+    el('form', { class: 'import-row', onsubmit: e => {
+      e.preventDefault();
+      run(async () => { await api('lidl/link', { code: code.value }); code.value = ''; toast('Lidl Plus gekoppeld. Weekmand haalt je bonnen op.'); });
+    } }, code, el('button', { class: 'primary' }, 'Koppelen')));
+  }
+  put($('lidl'), ...parts);
 }
 
 /** Eén onbekende bonregel: koppelen aan een ingrediënt of negeren. */
@@ -1823,7 +1874,7 @@ function purchaseRow(p) {
 
 async function spendDialog(id) {
   const s = await api('budget/spend', { id });
-  const shop = s.source === 'picnic' ? 'Picnic' : s.source === 'ah' ? 'Albert Heijn' : s.shop ?? 'Uitgave';
+  const shop = s.source === 'picnic' ? 'Picnic' : s.source === 'ah' ? 'Albert Heijn' : s.source === 'lidl' ? 'Lidl' : s.shop ?? 'Uitgave';
   const lines = s.lines ?? [];
   const toggle = (path, data, message) => { closeDialog(); run(async () => { await api(path, data); if (message) toast(message); await loadBudget(); }, { reload: false }); };
   // AH-bonus: van de bonusregels (nieuw), of het verschil tussen de producten en het totaal (oudere bonnen).

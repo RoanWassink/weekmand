@@ -49,9 +49,10 @@ Onder **Meer** in de app:
 - **Winkel en Picnic**: meld je aan met de sms-code en vink **Sessie onthouden** aan, zodat de deadline-melding ook na een herstart werkt.
 - **AI-aanbieder** (optioneel): Claude, OpenAI, Mistral, DeepSeek of een lokaal model.
 - **Albert Heijn** (optioneel): voor boodschappen in de winkel. Weekmand zet je boodschappen op Mijn lijst in de AH-app en telt je kassabonnen bij de voorraad.
+- **Lidl Plus** (optioneel): Weekmand leest je Lidl-kassabonnen voor het budget en de voorraad.
 - **Telegram-meldingen** (optioneel): maak een bot bij @BotFather en koppel die met een koppelcode. Ieder in huis kan een eigen chat koppelen; wat de bot in de ene chat verandert, lezen de anderen mee.
 
-De tab **Budget** laat zien wat je echt uitgaf (Picnic, AH-kassabonnen en losse uitgaven) per week, maand en jaar, per categorie en nodig tegenover extra.
+De tab **Budget** laat zien wat je echt uitgaf (Picnic, AH- en Lidl-kassabonnen en losse uitgaven) per week, maand en jaar, per categorie en nodig tegenover extra.
 
 Stap-voor-stap uitleg voor AI-sleutels (Mistral, DeepSeek, OpenAI, Claude) en de Telegram-bot: [docs/KOPPELEN.md](docs/KOPPELEN.md).
 
