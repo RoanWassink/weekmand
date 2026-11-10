@@ -17,7 +17,8 @@ Weekmand plaatst nooit zelf een bestelling en betaalt niets: afronden doe je in 
 | Receptgeschiedenis | **Week → Recepten**: alle gerechten die echt besteld zijn. Duimpje omhoog zet een gerecht in de favorietenpool (komt vaker terug, "favoriet" in de weekwens geeft extra voorrang, of **Zet op menu**); duimpje omlaag met een reden houdt het voorlopig van het menu. De ochtend na een bestelde maaltijd vraagt Telegram "Hoe was de …?" (uit te zetten met `RATE_PROMPTS=off`). |
 | Recept importeren | **Week → Recepten → Alle**: plak een link naar een receptpagina. Weekmand leest het schema.org-recept, rekent de hoeveelheden om naar per persoon in de eenheden van de catalogus en laat eerst een voorbeeld zien. Daarin kun je regels uitvinken; nieuwe ingrediënten worden toegevoegd. Werkt niet voor sites die het recept pas in de browser opbouwen (Plus) of automatische bezoekers weren (Allerhande). Plak dan de ingrediëntenlijst zelf (**Ingrediënten plakken**). Ook als tool `import_recipe` voor chat en MCP. Links naar het eigen netwerk worden geweigerd. |
 | Albert Heijn | Voor boodschappen in de AH-winkel. Weekmand zet de boodschappen op Mijn lijst in de AH-app (zelfscanner) en telt kassabonnen bij de voorraad. Voor "Duurder geworden" zoekt Weekmand de verpakking op van producten op je bonnen. Ook als tools `send_to_ah_list` en `import_ah_receipts`. Zie [Albert Heijn koppelen](#albert-heijn-koppelen-optioneel-voor-de-winkel). |
-| Budget | Tab **Budget**: wat je echt uitgaf per week, maand en jaar, tegenover een maandbudget. Bronnen: Picnic-bezorgingen en AH-kassabonnen van de afgelopen drie jaar (totalen meteen, de producten per bon rustig, een paar per uur) en losse uitgaven die je zelf invoert (markt, bakker). Per categorie, nodig tegenover extra (snacks, snoep, alcohol) en geen eten, per winkel, de grootste posten, wat duurder werd, bespaard met acties, kosten per persoon per dag en een koers voor de rest van de periode. Limiet per categorie, een bon niet laten meetellen, export als CSV. Zie [Budget](#budget). |
+| Lidl Plus | Leest je Lidl-kassabonnen uit de Lidl Plus-app: in het budget (met Lidl Plus-korting als besparing) en bij de voorraad. Ook als tool `import_lidl_receipts`. Zie [Lidl Plus koppelen](#lidl-plus-koppelen-optioneel). |
+| Budget | Tab **Budget**: wat je echt uitgaf per week, maand en jaar, tegenover een maandbudget. Bronnen: Picnic-bezorgingen en AH- en Lidl-kassabonnen van de afgelopen drie jaar (totalen meteen, de producten per bon rustig, een paar per uur) en losse uitgaven die je zelf invoert (markt, bakker). Per categorie, nodig tegenover extra (snacks, snoep, alcohol) en geen eten, per winkel, de grootste posten, wat duurder werd, bespaard met acties, kosten per persoon per dag en een koers voor de rest van de periode. Limiet per categorie, een bon niet laten meetellen, export als CSV. Zie [Budget](#budget). |
 | Leren | Keur je iets twee weken achter elkaar af, dan vraagt Weekmand of het dat voortaan moet vermijden ("Je schrapt vaak vis op donderdag, zal ik dat vermijden?"). |
 | Koppelingen | MCP-server voor Claude Code en Claude Desktop, OpenAPI voor een Custom GPT, MQTT met automatische ontdekking voor Home Assistant, NFC/QR-links voor "is op". |
 
@@ -71,6 +72,26 @@ Weekmand ziet je AH-wachtwoord niet. Alleen de tokens komen in `data/secrets.jso
 
 AH heeft geen openbare API. Weekmand gebruikt de API van de AH-app, zoals community-projecten die beschrijven. Dat kan zonder aankondiging stoppen met werken. Weekmand houdt het aantal verzoeken laag en stuurt een eerlijke User-Agent. Weigert AH (403 of 429), dan wacht Weekmand twaalf uur. Verloopt de koppeling, dan krijg je een melding.
 
+### Lidl Plus koppelen (optioneel)
+
+Weekmand leest alleen je kassabonnen uit Lidl Plus. Geen coupons, geen aanbiedingen, geen profiel.
+
+- **Budget:** elke Lidl-bon komt in de tab **Budget**, met de producten per bon. "Lidl Plus korting" en "In prijs verlaagd" horen bij het product erboven en tellen bij "Bespaard met acties". Ingeleverd statiegeld staat apart. Had je dezelfde bon al als foto ingevoerd (zelfde dag en bedrag), dan telt die foto niet meer mee.
+- **Voorraad:** elke vier uur haalt Weekmand nieuwe bonnen op en telt de producten bij de voorraad, net als bij AH. Onbekende regels koppel of negeer je onder **Meer → Lidl Plus**, of laat je de AI zoeken.
+
+Koppelen gaat op een computer, onder **Meer → Lidl Plus**:
+
+1. Open de inlogpagina van Lidl via de link in Weekmand (Chrome of Edge).
+2. Druk in dat tabblad op F12, kies **Network**, vink **Preserve log** aan en typ `callback` in het filterveld. Doe dit vóórdat je inlogt.
+3. Log in en vul de code in die je krijgt. Daarna gebeurt er niets meer of zie je een foutmelding. Dat is normaal: de pagina probeert de Lidl Plus-app te openen.
+4. Klik op de regel `callback` (status 302). Onder **Response Headers** staat `location: com.lidlplus.app://callback?code=…`. Plak die waarde in Weekmand, binnen een paar minuten.
+
+Op een telefoon met de Lidl Plus-app werkt dit niet: de app vangt de code dan zelf op.
+
+Weekmand ziet je Lidl-wachtwoord niet. Alleen de tokens komen in `data/secrets.json`. Lidl geeft bij elke verversing een nieuw verversingstoken; Weekmand bewaart steeds het nieuwste. Bij het koppelen tellen de bonnen van de afgelopen drie dagen bij de voorraad; het budget krijgt ze allemaal, tot drie jaar terug, een stuk of negen per ronde.
+
+Lidl heeft geen openbare API. Weekmand gebruikt de API van de Lidl Plus-app, zoals open-source projecten die beschrijven. De bonnen-API wil de kenmerken van de app (`App`, `App-Version`, `Operating-System`); Weekmand stuurt die mee, met een eerlijke User-Agent. Dat kan zonder aankondiging stoppen met werken. Weigert Lidl de app-versie, zet dan `LIDL_APP_VERSION` in `config.env` op de versie van de Lidl Plus-app. Weigert Lidl (403 of 429), dan wacht Weekmand twaalf uur.
+
 ### AI koppelen (optioneel)
 
 **Meer → AI-aanbieder**: Claude (Anthropic), OpenAI, Mistral, DeepSeek of een lokaal model met een OpenAI-compatibele API (bijv. Ollama). Je kunt meerdere aanbieders tegelijk koppelen; elke sleutel wordt één keer ingevoerd en bewaard (de webapp toont alleen de laatste vier tekens). Per aanbieder kies je het model uit de lijst die de aanbieder zelf geeft, en met **Gebruiken** wissel je van aanbieder. Opnieuw opslaan zonder sleutel houdt de bewaarde sleutel. Onder **Verbruik en kosten** staan per maand, aanbieder en model het aantal aanvragen, de tokens (in, uit, uit de cache) en een schatting in dollars; aanbieders melden alleen tokens, dus de prijs per miljoen tokens kun je per model aanpassen. Het standaardmodel voor Claude is `claude-opus-5-5`; voor lagere kosten vul je `claude-haiku-5-5` in als model-ID. Claude loopt via de officiële Anthropic SDK; bij een weigering schakelt de API automatisch naar een terugvalmodel. Het taalmodel krijgt menu, voorraad en mandinformatie via tools, maar kan de mand niet zelf toepassen: dat gaat altijd via de knop.
@@ -105,7 +126,7 @@ Tools: `get_pantry_status`, `update_pantry`, `get_meal_plan`, `propose_meal_plan
 
 De tab **Budget** telt wat er werkelijk uitgegeven is, los van wat Weekmand voorstelt.
 
-- **Bronnen.** Twee keer per dag haalt Weekmand nieuwe Picnic-bezorgingen en AH-kassabonnen op, tot drie jaar terug. Totalen zijn er meteen. De producten per bon volgen rustig, een stuk of twaalf per keer, nieuwste eerst; **Bijwerken** haalt er meteen een stuk meer. Tot dan staat dat bedrag onder "Nog niet uitgesplitst". Bezorgkosten, statiegeld en korting staan apart.
+- **Bronnen.** Twee keer per dag haalt Weekmand nieuwe Picnic-bezorgingen en AH- en Lidl-kassabonnen op, tot drie jaar terug. Totalen zijn er meteen. De producten per bon volgen rustig, een stuk of twaalf per keer, nieuwste eerst; **Bijwerken** haalt er meteen een stuk meer. Tot dan staat dat bedrag onder "Nog niet uitgesplitst". Bezorgkosten, statiegeld en korting staan apart.
 - **Indelen.** Elk product krijgt een categorie en een soort: *nodig*, *extra* (snoep, chips, frisdrank, alcohol, gebak) of *geen eten* (schoonmaak, verzorging). Volgorde: je eigen keuze, dan de AI, dan vaste woorden (pils, chips, toiletpapier), dan de ingrediëntencatalogus. Wat niemand kent, telt als nodig in "Overig" tot de AI of jij het indeelt. Tik een product om het te wijzigen; dat geldt ook voor eerdere perioden. Naar de AI gaan alleen productnamen.
 - **AH-bonus.** De bonusregels onderaan een kassabon ("BONUS AHRUNDERGEHA -0,40") koppelt Weekmand op naam aan het product (RUNDERGEHAKT). Dat product telt dan mee met wat je echt betaalde, en de korting telt bij "Bespaard met acties". De bon zegt niet welk product de korting kreeg; een onduidelijke regel blijft los, en telt alleen als besparing. Oudere bonnen worden een keer opnieuw opgehaald voor hun bonusregels.
 - **Duurder geworden.** Vergelijkt de prijs per stuk van dezelfde verpakking: 300 g rundergehakt en 1 kg rundergehakt zijn twee producten.
@@ -143,7 +164,7 @@ npm ci
 ./deploy/Update-Weekmand.ps1
 ```
 
-Het script draait de tests, controleert dat alle afhankelijkheden de vastgepinde versies zijn, verpakt de app en zet een nieuwe release in `/opt/weekmand/releases`. Bij een mislukte healthcheck gaat de vorige release terug. De database (`/opt/weekmand/data`) blijft staan; de eerste start van deze versie zet de gegevens van versie 1 (huishouden, voorraad, bestelgeschiedenis) automatisch over. Extra instellingen gaan in `/opt/weekmand/config.env` (zie `.env.example`); herstart daarna met `/etc/init.d/weekmand restart`. Meldingen en fouten van Weekmand staan in het systeemlog: `logread -e node`. Verandert `deploy/weekmand.init`, zet het nieuwe script dan zelf in `/etc/init.d/weekmand` (het update-script breekt af als ze verschillen) en gebruik daarna `stop` en `start`: bij `restart` houdt procd de oude instellingen.
+Het script draait de tests, controleert dat alle afhankelijkheden de vastgepinde versies zijn, verpakt de app en zet een nieuwe release in `/opt/weekmand/releases`. Bij een mislukte healthcheck gaat de vorige release terug. De database (`/opt/weekmand/data`) blijft staan; de eerste start van deze versie zet de gegevens van versie 1 (huishouden, voorraad, bestelgeschiedenis) automatisch over. Extra instellingen gaan in `/opt/weekmand/config.env` (zie `.env.example`). Met `LAN_LISTEN=uit` luistert Weekmand tijdelijk niet op het thuisnetwerk (alleen 127.0.0.1); `LAN_HOST` mag dan blijven staan. Herstart daarna met `/etc/init.d/weekmand restart`. Meldingen en fouten van Weekmand staan in het systeemlog: `logread -e node`. Verandert `deploy/weekmand.init`, zet het nieuwe script dan zelf in `/etc/init.d/weekmand` (het update-script breekt af als ze verschillen) en gebruik daarna `stop` en `start`: bij `restart` houdt procd de oude instellingen.
 
 Geheugen: ongeveer 50–80 MB in gebruik. Met `NODE_OPTIONS=--max-old-space-size=96` in `config.env` begrens je de heap. De Anthropic SDK (21 MB op schijf) wordt alleen geladen als Claude de gekozen aanbieder is.
 
@@ -159,7 +180,7 @@ Alpine-image in twee fasen, `mem_limit: 150m`, data in het volume `weekmand`. St
 
 - Weekmand bestelt en betaalt nooit. Elke mandwijziging is zichtbaar vóór je hem goedkeurt; een tussentijds gewijzigde mand stopt de synchronisatie.
 - Webapp: inloggen met een eigen account (scrypt-hash, sessiecookie van 180 dagen, korte blokkade na 5 foute pogingen). Het eerste account maak je aan vanaf het thuisnetwerk zolang er nog geen account is; daarna beheer je accounts onder **Meer → Accounts**. Gebruiker `weekmand` met `APP_PASSWORD` blijft werken. MCP, OpenAPI en Home Assistant-REST: altijd het API-token. Verzoeken van andere websites worden geweigerd.
-- Geheimen (Picnic-sessie, AH-tokens, AI-sleutel, Telegram-token, API-token) staan alleen in `data/secrets.json` en alleen als je **onthouden** aanvinkt; nooit in de database of logs.
+- Geheimen (Picnic-sessie, AH- en Lidl-tokens, AI-sleutel, Telegram-token, API-token) staan alleen in `data/secrets.json` en alleen als je **onthouden** aanvinkt; nooit in de database of logs.
 - Naar een AI-aanbieder gaan alleen je bericht, datum en huishoudgrootte en wat de tools teruggeven (menu, voorraad, mandregels); voor de bonnen en het budget alleen productnamen. Een foto van een bon gaat naar de AI-aanbieder om te lezen; Weekmand bewaart de foto zelf niet. Naar ntfy gaat alleen de meldingstekst.
 
 ## Architectuur

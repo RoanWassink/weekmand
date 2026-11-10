@@ -16,6 +16,10 @@ export type SecretData = {
   telegramToken?: string;
   /** Tokens van het AH-account (geen wachtwoord). */
   ah?: { accessToken: string; refreshToken: string; expiresAt: number; linkedAt: string };
+  /** Tokens van het Lidl Plus-account (geen wachtwoord). */
+  lidl?: { accessToken: string; refreshToken: string; expiresAt: number; linkedAt: string };
+  /** PKCE-sleutel van een Lidl-inlog die nog loopt. */
+  lidlPending?: { verifier: string };
 };
 
 export class Secrets {

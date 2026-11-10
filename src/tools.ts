@@ -244,8 +244,14 @@ export const tools: Tool[] = [
     run: async app => app.importAhReceipts(),
   },
   {
+    name: 'import_lidl_receipts', title: 'Lidl-bonnen ophalen',
+    description: 'Haal nieuwe kassabonnen van het gekoppelde Lidl Plus-account op en tel de gekochte producten bij de voorraad. Elke bon telt één keer.',
+    input: obj({}),
+    run: async app => app.importLidlReceipts(),
+  },
+  {
     name: 'get_budget', title: 'Uitgaven en budget', readOnly: true,
-    description: 'Wat het huishouden aan boodschappen uitgaf (Picnic, AH-kassabonnen, losse uitgaven) in een week, maand of jaar: totaal tegenover het budget, per categorie, nodig tegenover extra (snacks, alcohol), per winkel, grootste posten en wat duurder werd.',
+    description: 'Wat het huishouden aan boodschappen uitgaf (Picnic, AH- en Lidl-kassabonnen, losse uitgaven) in een week, maand of jaar: totaal tegenover het budget, per categorie, nodig tegenover extra (snacks, alcohol), per winkel, grootste posten en wat duurder werd.',
     input: obj({ period: { type: 'string', enum: ['week', 'month', 'year'] }, back: num('Hoeveel perioden terug: 0 = deze, 1 = vorige.') }),
     run: async (app, a) => {
       const b = app.budgetOverview({ period: a.period ?? 'month', offset: -Math.abs(Number(a.back) || 0) });
@@ -254,7 +260,7 @@ export const tools: Tool[] = [
         forecast: b.forecastCents === null ? null : euro(b.forecastCents), previous: `${b.previousLabel}: ${euro(b.previousCents)}`,
         savedWithOffers: euro(b.savingsCents), perPersonPerDay: euro(b.perPersonDayCents), purchases: b.count,
         notYetSplit: b.coverage < 1 ? `${Math.round((1 - b.coverage) * 100)}% van het bedrag is nog niet per product bekend` : null,
-        byShop: { Picnic: euro(b.bySource.picnic), 'Albert Heijn': euro(b.bySource.ah), overig: euro(b.bySource.manual) },
+        byShop: { Picnic: euro(b.bySource.picnic), 'Albert Heijn': euro(b.bySource.ah), Lidl: euro(b.bySource.lidl), overig: euro(b.bySource.manual) },
         byCategory: b.categories.map(c => `${c.label}: ${euro(c.cents)}`),
         byKind: b.kinds.map(k => `${k.label}: ${euro(k.cents)}`),
         topProducts: b.products.slice(0, 8).map(p => `${p.name}: ${euro(p.cents)}`),
