@@ -281,6 +281,17 @@ h3.step { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); }
 .budget.over > div { background: var(--warn); }
 .pantry-item { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) 0; }
 .pantry-item + .pantry-item { border-top: 1px solid var(--line); }
+/* Boodschappenlijst (zelf boodschappen doen): afvinken in de winkel. */
+.shop-list h4 { margin: var(--s4) 0 var(--s1); font-size: .85rem; font-weight: 600; color: var(--ink-2); }
+.shop-list h4:first-child { margin-top: 0; }
+.shop-list .list-row { display: flex; align-items: center; gap: var(--s3); min-height: 44px; padding: var(--s1) 0; border-top: 1px solid var(--line); cursor: pointer; }
+.shop-list h4 + .list-row { border-top: 0; }
+.shop-list .list-row input { width: 22px; height: 22px; flex: none; accent-color: var(--brand); }
+.shop-list .list-row .grow { min-width: 0; }
+.shop-list .list-row.done .grow, .shop-list .list-row.done .amount { color: var(--ink-2); text-decoration: line-through; }
+.shop-list .list-row.have { cursor: default; color: var(--ink-2); }
+.shop-list .list-row.have .tick { width: 22px; flex: none; text-align: center; color: var(--ok); }
+.shop-list .amount { color: var(--ink-2); font-size: .9rem; white-space: nowrap; }
 .pantry-item .grow { flex: 1; min-width: 0; }
 #plan .card > * + * { margin-top: var(--s2); }
 #plan .card > .line { margin-top: 0; }

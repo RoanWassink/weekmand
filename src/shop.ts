@@ -17,7 +17,7 @@ const plainText = (text: unknown) => typeof text === 'string'
 
 /** Alles wat Weekmand van een winkel nodig heeft. Er is geen checkout of betaalroute. */
 export interface Shop {
-  readonly kind: 'mock' | 'picnic';
+  readonly kind: 'mock' | 'picnic' | 'self';
   readonly label: string;
   ready(): boolean;
   readCart(): Promise<ShopCart>;
@@ -31,6 +31,25 @@ export const quantityOf = (cart: ShopCart, id: string) =>
   cart.lines.filter(line => line.id === id).reduce((sum, line) => sum + line.quantity, 0);
 
 const normalize = (text: string) => text.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ');
+
+// ───────────────────────────── Zelf boodschappen doen ─────────────────────────────
+
+/**
+ * Geen bezorgdienst: je doet zelf boodschappen (Lidl, markt, AH). Er is geen mand en geen
+ * deadline; Weekmand rekent met de gewone verpakkingen uit de catalogus en maakt een lijst.
+ */
+export class SelfShop implements Shop {
+  readonly kind = 'self' as const;
+  readonly label = 'Zelf boodschappen doen';
+  #mock: MockShop;
+  constructor(mock: MockShop) { this.#mock = mock; }
+  ready() { return true; }
+  async readCart(): Promise<ShopCart> { return { id: 'zelf', lines: [], totalCents: 0 }; }
+  search(query: string) { return this.#mock.search(query); }
+  async add(): Promise<ShopCart> { throw new Problem(409, 'Zonder Picnic is er geen mand: gebruik de boodschappenlijst.'); }
+  async remove(): Promise<ShopCart> { throw new Problem(409, 'Zonder Picnic is er geen mand: gebruik de boodschappenlijst.'); }
+  async slots(): Promise<DeliverySlot[]> { return []; }
+}
 
 // ───────────────────────────── Demo-winkel ─────────────────────────────
 

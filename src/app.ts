@@ -6,10 +6,10 @@ import type { Feedback, ProductLink, Store } from './db.ts';
 import { check, Problem } from './errors.ts';
 import { detectHabits, ruleId } from './learn.ts';
 import type { PicnicHistory } from './picnic-history.ts';
-import { allowedOn, allowedRecipes, buildPlan, parseWish, portions, proposeMenu, recipeCost, stockState } from './planner.ts';
+import { allowedOn, allowedRecipes, buildPlan, mealNeeds, parseWish, portions, proposeMenu, recipeCost, stockState } from './planner.ts';
 import type { Extra, OrderOptions, Plan, PlanMeal, ProductOption, Regular } from './planner.ts';
 import type { Secrets } from './secrets.ts';
-import { applyChange, MockShop, PicnicShop, quantityOf } from './shop.ts';
+import { applyChange, MockShop, PicnicShop, quantityOf, SelfShop } from './shop.ts';
 import type { Shop } from './shop.ts';
 import { addDays, dayName, isoWeek, localDate, weekday, weekdays } from './time.ts';
 import type { AvoidRule, BaseUnit, Category, DeliverySlot, Household, IngredientDef, Meal, PantryItem, Recipe, ShopCart, ShopProduct } from './types.ts';
@@ -31,6 +31,7 @@ type StoredReview = { id: string; createdAt: number; plan: Plan; done?: boolean 
 export type Notice = { text: string; buttons?: { label: string; data: string }[]; key?: string };
 
 const day = 86_400_000;
+export type ShopMode = 'mock' | 'picnic' | 'self';
 
 /** Regels op een kassabon die geen boodschappen zijn. */
 const notGroceries = /statiegeld|emballage|zegel|airmiles|air miles|bonus|korting|draagtas|\btas\b|cadeaukaart|toeslag|retour/i;
@@ -57,7 +58,7 @@ export type RecipeAdapter = (recipe: { name: string; minutes: number; steps: str
 export type ProductClassifier = (names: string[]) => Promise<{ name: string; category: BudgetCategory; kind: SpendKind }[] | null>;
 type BudgetPrefs = { monthCents?: number; limits?: Partial<Record<BudgetCategory, number>> };
 /** De laatste mandberekening met de Picnic-mand waarmee hij gemaakt is, voor na een herstart. */
-type PlanSnapshot = { at: number; shopMode: 'mock' | 'picnic'; plan: Awaited<ReturnType<Weekmand['plan']>>; cart: ShopCart; cartAt: number };
+type PlanSnapshot = { at: number; shopMode: ShopMode; plan: Awaited<ReturnType<Weekmand['plan']>>; cart: ShopCart; cartAt: number };
 const categories: Category[] = ['groente-fruit', 'aardappel', 'vlees', 'vis', 'vega', 'zuivel-eieren', 'kaas', 'brood', 'pasta-rijst', 'conserven', 'kruiden-sauzen', 'olie-azijn', 'bakken', 'diepvries', 'drinken', 'ontbijt', 'snacks', 'huishouden'];
 
 
@@ -92,6 +93,8 @@ export class Weekmand {
   readonly secrets: Secrets;
   readonly catalog: Catalog;
   readonly mock: MockShop;
+  /** Zelf boodschappen doen: geen mand, wel een lijst. */
+  readonly self: SelfShop;
   readonly picnic: PicnicShop;
   readonly ah: AlbertHeijn;
   readonly lidl: Lidl;
@@ -134,6 +137,7 @@ export class Weekmand {
     this.now = options.now ?? Date.now;
     this.catalog = new Catalog(this.store);
     this.mock = new MockShop(this.store, () => this.catalog.ingredients());
+    this.self = new SelfShop(this.mock);
     this.picnic = options.picnic ?? new PicnicShop(this.secrets);
     this.picnic.onExpired = () => this.notify({ text: 'Je Picnic-sessie is verlopen. Meld je opnieuw aan in Weekmand (Instellingen → Picnic) om automatische aanvullingen te laten werken.', key: 'picnic-expired-' + localDate(this.now()) });
     this.picnic.onImages = images => this.#noteImages(images);
@@ -214,15 +218,15 @@ export class Weekmand {
     this.store.update<AvoidRule[]>('avoid', [], rules => rules.filter((_, i) => i !== index));
   }
 
-  get shopMode(): 'mock' | 'picnic' { return this.store.get<'mock' | 'picnic'>('shopMode', 'mock'); }
-  setShopMode(mode: 'mock' | 'picnic') {
-    check(mode === 'mock' || mode === 'picnic', 'Kies demo of picnic.');
+  get shopMode(): ShopMode { return this.store.get<ShopMode>('shopMode', 'mock'); }
+  setShopMode(mode: ShopMode) {
+    check(mode === 'mock' || mode === 'picnic' || mode === 'self', 'Kies demo, picnic of zelf.');
     this.store.set('shopMode', mode);
     this.#slots = null;
     this.#forgetCart();
     this.changed();
   }
-  get shop(): Shop { return this.shopMode === 'picnic' ? this.picnic : this.mock; }
+  get shop(): Shop { return this.shopMode === 'picnic' ? this.picnic : this.shopMode === 'self' ? this.self : this.mock; }
   #requireShop() {
     if (!this.shop.ready()) throw new Problem(409, 'Meld je eerst aan bij Picnic (Instellingen → Picnic), of schakel naar de demowinkel.');
     return this.shop;
@@ -239,13 +243,13 @@ export class Weekmand {
     const load = this.#slotsLoading ??= (async () => {
       const slots = this.shop === this.mock ? await this.mock.slots(this.now()) : await this.shop.slots();
       this.#slots = { at: this.now(), slots };
-      if (this.shop !== this.mock) this.store.set('slotsCache', { at: this.now(), shopMode: this.shopMode, slots });
+      if (this.shopMode === 'picnic') this.store.set('slotsCache', { at: this.now(), shopMode: this.shopMode, slots });
       return slots;
     })().finally(() => { this.#slotsLoading = null; });
     // Verouderd maar aanwezig: dat meteen gebruiken en Picnic op de achtergrond lezen, zodat de
     // webapp nooit op Picnic wacht. Verlopen deadlines vallen in delivery() vanzelf af.
     // De demowinkel is direct; daar gewoon wachten (houdt het voorspelbaar).
-    if (!force && cached && this.shop !== this.mock) {
+    if (!force && cached && this.shopMode === 'picnic') {
       load.catch(error => console.error('Bezorgmomenten:', (error as Error).message));
       return cached.slots;
     }
@@ -302,7 +306,8 @@ export class Weekmand {
     } else {
       const today = localDate(this.now());
       check(typeof input.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input.date), 'Kies een datum.');
-      check(input.date > today && input.date <= addDays(today, 60), 'Kies een dag vanaf morgen, binnen twee maanden.');
+      const first = this.shopMode === 'self' ? today : addDays(today, 1);
+      check(input.date >= first && input.date <= addDays(today, 60), this.shopMode === 'self' ? 'Kies een dag vanaf vandaag, binnen twee maanden.' : 'Kies een dag vanaf morgen, binnen twee maanden.');
       this.store.set('deliveryChoice', { date: input.date });
     }
     this.#slots = null;
@@ -365,7 +370,8 @@ export class Weekmand {
     const { next } = await this.delivery();
     const today = localDate(this.now());
     const deliveryDate = next ? localDate(Date.parse(next.windowStart)) : this.deliveryChoice?.date ?? addDays(today, 1);
-    const start = deliveryDate > today ? deliveryDate : addDays(today, 1);
+    // Zelf boodschappen doen: vanaf de gekozen boodschappendag, anders vanaf vandaag.
+    const start = this.shopMode === 'self' ? this.deliveryChoice?.date ?? today : deliveryDate > today ? deliveryDate : addDays(today, 1);
     const days = this.household.days;
     // Voorstellen vullen `days` avonden; de bestelling dekt alle geplande maaltijden in de week vanaf de bezorging.
     return { start, end: addDays(start, 6), dates: Array.from({ length: days }, (_, i) => addDays(start, i)), slot: next };
@@ -1040,7 +1046,7 @@ export class Weekmand {
   }
 
   #productKey(productId: string, name?: string): string | undefined {
-    if (this.shopMode === 'mock') return this.catalog.ingredients().find(i => i.packs.some(p => p.id === productId))?.key;
+    if (this.shopMode !== 'picnic') return this.catalog.ingredients().find(i => i.packs.some(p => p.id === productId))?.key;
     const link = this.store.links().find(l => l.productId === productId);
     if (link) return link.key;
     const variants = this.store.get<Record<string, { options: ProductOption[] }>>('variants', {});
@@ -1296,7 +1302,7 @@ export class Weekmand {
       for (const line of lines) {
         const key = this.#productKey(line.productId, line.name);
         const def = key ? this.catalog.ingredient(key) : undefined;
-        const pack = def ? (this.shopMode === 'mock' ? def.packs.find(p => p.id === line.productId)?.amount : packAmount(line.unitQuantity, def)) : undefined;
+        const pack = def ? (this.shopMode !== 'picnic' ? def.packs.find(p => p.id === line.productId)?.amount : packAmount(line.unitQuantity, def)) : undefined;
         if (!def || !pack) { unmatched.push(`${line.quantity}× ${line.name}`); continue; }
         const item = this.store.pantryItem(def.key) ?? { key: def.key, amount: null, checkedAt: null, minimum: 0 };
         this.store.savePantry({ ...item, amount: (item.amount ?? 0) + pack * line.quantity, checkedAt: now });
@@ -1360,6 +1366,76 @@ export class Weekmand {
     this.#deriveRegulars(history);
     this.changed();
     return { deliveries: history.deliveries.length, addedToPantry: added };
+  }
+
+  // ───────────── Boodschappenlijst (zelf boodschappen doen) ─────────────
+
+  /**
+   * De boodschappenlijst uit het voorstel: alles wat Weekmand wil kopen, met de afdeling erbij
+   * (de webapp groepeert), en per gerecht welke ingrediënten op de lijst staan en welke je al hebt.
+   * Werkt in elke winkelstand; zonder Picnic is dit de plek waar je boodschappen staan.
+   */
+  async shoppingList() {
+    const plan = await this.currentPlan();
+    const checked = this.#listChecked();
+    const items: { id: string; key?: string; name: string; amount: string; category: string; why: string; checked: boolean }[] = [];
+    for (const l of plan.lines) {
+      if (!(l.add > 0) || l.declined) continue;
+      const key = l.key ?? this.#productKey(l.productId, l.product);
+      const def = key ? this.catalog.ingredient(key) : undefined;
+      items.push({
+        id: l.productId, ...(key ? { key } : {}), name: def?.name ?? l.product,
+        amount: l.unitQuantity ? (l.add > 1 ? `${l.add} × ${l.unitQuantity}` : l.unitQuantity) : `${l.add}×`,
+        // Vaste boodschappen en losse producten zonder ingrediënt: een eigen groep.
+        category: l.key && def ? def.category : 'vast', why: l.reason, checked: checked.has(l.productId),
+      });
+    }
+    // Zonder passende verpakking (bijv. een zelf toegevoegd product): de hoeveelheid uit de recepten.
+    const w = await this.window();
+    const stored = this.store.meals(w.start, w.end).flatMap(m => {
+      const recipe = this.catalog.recipe(m.recipeId);
+      return recipe ? [{ date: m.date, recipe, servings: m.servings }] : [];
+    });
+    const needs = mealNeeds(stored);
+    for (const m of plan.missing) {
+      const def = this.catalog.ingredient(m.key);
+      const need = needs.get(m.key)?.amount ?? 0;
+      const stock = this.store.pantryItem(m.key)?.amount ?? 0;
+      const id = 'key:' + m.key;
+      items.push({ id, key: m.key, name: m.name, amount: def && need > stock ? formatAmount(need - stock, def.unit) : '', category: def?.category ?? 'vast', why: needs.get(m.key)?.meals.join(', ') ?? '', checked: checked.has(id) });
+    }
+    const onList = new Map<string, typeof items[number]>();
+    for (const i of items) if (i.key && !onList.has(i.key)) onList.set(i.key, i);
+    const meals = stored.map(m => ({
+      date: m.date, day: dayName(m.date), name: m.recipe.name, servings: m.servings,
+      ingredients: m.recipe.ingredients.map(i => {
+        const def = this.catalog.ingredient(i.key);
+        const item = onList.get(i.key);
+        return { key: i.key, name: def?.name ?? i.key, amount: def ? formatAmount(i.amount * m.servings, def.unit) : '', ...(item ? { id: item.id, checked: item.checked } : { have: true }) };
+      }),
+    }));
+    return { date: w.start, mode: this.shopMode, items, meals, questions: plan.questions };
+  }
+
+  /** Afgevinkt in de winkel; geldt anderhalve dag, zodat de lijst van volgende week weer leeg begint. */
+  #listChecked() {
+    const all = this.store.get<Record<string, number>>('listChecked', {});
+    return new Set(Object.entries(all).filter(([, at]) => this.now() - at < 36 * 36e5).map(([id]) => id));
+  }
+
+  checkListItem(id: string, checked: boolean) {
+    check(typeof id === 'string' && id.length > 0 && id.length <= 120, 'Welk product?');
+    this.store.update<Record<string, number>>('listChecked', {}, all => {
+      const fresh = Object.fromEntries(Object.entries(all).filter(([, at]) => this.now() - at < 36 * 36e5));
+      if (checked) fresh[id] = this.now(); else delete fresh[id];
+      return fresh;
+    });
+    // Geen 'change': een vinkje verandert het voorstel niet (en mag Picnic niet opnieuw laten lezen).
+    return { id, checked };
+  }
+
+  clearListChecks() {
+    this.store.set('listChecked', {});
   }
 
   // ───────────── Albert Heijn: Mijn lijst en kassabonnen ─────────────
