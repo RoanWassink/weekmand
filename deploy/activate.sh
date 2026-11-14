@@ -60,8 +60,28 @@ if [ ! -e "$service" ]; then
   chmod 755 "$service"
 fi
 
+# De updater: voert updates uit die in de webapp zijn aangevraagd (zie deploy/updater.mjs).
+install_updater() {
+  [ -f "$directory/deploy/updater.mjs" ] || return 0
+  mkdir -p "$root/update"
+  chmod 755 "$root/update"
+  cp "$directory/deploy/updater.mjs" "$root/update/updater.mjs.new"
+  chmod 644 "$root/update/updater.mjs.new"
+  mv "$root/update/updater.mjs.new" "$root/update/updater.mjs"
+  updater=/etc/init.d/weekmand-updater
+  if ! cmp -s "$directory/deploy/weekmand-updater.init" "$updater"; then
+    cp "$directory/deploy/weekmand-updater.init" "$updater.new"
+    chmod 755 "$updater.new"
+    mv "$updater.new" "$updater"
+    "$updater" enable
+    # Niet vanuit de updater zelf herstarten: dan stopt hij zichzelf. Zijn lus pakt updater.mjs elke keer opnieuw.
+    [ "${WEEKMAND_FROM_UPDATER:-}" = 1 ] || "$updater" restart
+  fi
+}
+
 activate "$release"
 if "$service" restart && healthy && "$service" enable; then
+  install_updater || echo "De updater kon niet worden bijgewerkt." >&2
   printf 'Weekmand-release %s is actief.\n' "$release"
   exit 0
 fi

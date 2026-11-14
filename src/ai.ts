@@ -25,7 +25,15 @@ export type ImageInput = { mediaType: 'image/jpeg' | 'image/png' | 'image/webp';
  * maxTokens: ruimte voor het antwoord (lange lijsten in één toolaanroep hebben meer nodig);
  * images: foto's bij het bericht; model: ander model van dezelfde aanbieder (bijv. eentje dat foto's leest).
  */
-type ConverseInput = { system: string; context: string; history: Turn[]; message: string; tools: ToolSpec[]; run: Runner; maxSteps?: number; maxTokens?: number; images?: ImageInput[]; model?: string };
+/** effort 'low': minder lang nadenken bij modellen die dat doen (Mistral Large); werk op de achtergrond hoeft niet zwaar. */
+type ConverseInput = { system: string; context: string; history: Turn[]; message: string; tools: ToolSpec[]; run: Runner; maxSteps?: number; maxTokens?: number; images?: ImageInput[]; model?: string; effort?: 'low' };
+
+/** Tekst uit een antwoord: een gewone tekenreeks, of blokken (Mistral zet er dan ook zijn denkstappen in). */
+export function contentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('');
+}
 
 export const modelOf = (c: AIConfig) => c.model?.trim() || providers[c.provider].model;
 
@@ -133,6 +141,8 @@ async function openaiCompatible(config: AIConfig, input: ConverseInput): Promise
   ];
   const tools = input.tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input } }));
   let text = '';
+  // Minder nadenken vragen; kent het model dat niet (fout 400), dan één keer zonder.
+  let effort = config.provider === 'mistral' && input.effort ? input.effort : undefined;
   for (let step = 0; step < (input.maxSteps ?? 8); step++) {
     let response: Response;
     try {
@@ -142,11 +152,13 @@ async function openaiCompatible(config: AIConfig, input: ConverseInput): Promise
         body: JSON.stringify({
           model: input.model || modelOf(config), messages, max_tokens: input.maxTokens ?? 1500, ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
           ...(config.provider === 'deepseek' ? { thinking: { type: 'disabled' } } : {}),
+          ...(effort ? { reasoning_effort: effort } : {}),
         }),
       });
     } catch (error) {
       throw new Problem(502, (error as Error)?.name === 'TimeoutError' ? `${label} reageerde te laat.` : `${label} is niet bereikbaar.`);
     }
+    if (response.status === 400 && effort) { effort = undefined; step--; continue; }
     if (!response.ok) throw apiProblem(response.status, label);
     const data = await response.json().catch(() => null);
     const u = data?.usage ?? {};
@@ -154,7 +166,7 @@ async function openaiCompatible(config: AIConfig, input: ConverseInput): Promise
       count(u.prompt_cache_hit_tokens ?? u.prompt_tokens_details?.cached_tokens));
     const message = data?.choices?.[0]?.message;
     if (!message) throw new Problem(502, `${label} gaf een leeg antwoord.`);
-    text = (typeof message.content === 'string' ? message.content : '').trim() || text;
+    text = contentText(message.content).trim() || text;
     const calls: any[] = message.tool_calls ?? [];
     messages.push({ role: 'assistant', content: message.content ?? '', ...(calls.length ? { tool_calls: calls } : {}) });
     if (!calls.length) return text;

@@ -1,6 +1,6 @@
 import type { Weekmand } from './app.ts';
 import { check } from './errors.ts';
-import { addDays, localDate, resolveDay } from './time.ts';
+import { addDays, dayName, localDate, resolveDay } from './time.ts';
 import { euro } from './units.ts';
 
 /**
@@ -45,8 +45,10 @@ export function planSummary(plan: Awaited<ReturnType<Weekmand['plan']>>) {
     meals: plan.meals.map(m => `${m.day} ${m.date}: ${m.name} (${m.servings} p.)`),
     changes,
     unchanged_lines: plan.lines.length - changes.length,
+    // Na het afrekenen is de Picnic-mand leeg; de geplaatste bestelling telt mee als al gekocht.
+    ...(plan.placed ? { already_ordered: { delivery: `${dayName(plan.placed.date)} ${plan.placed.date}`, total: euro(plan.placed.totalCents), products: plan.placed.count } } : {}),
     add_total: euro(plan.addCents), remove_total: euro(plan.removeCents),
-    cart_total_after: euro(plan.totalCents), budget: euro(plan.budgetCents), over_budget: plan.totalCents > plan.budgetCents,
+    cart_total_after: euro(plan.totalCents), budget: euro(plan.budgetCents), over_budget: (plan.placed?.totalCents ?? 0) + plan.totalCents > plan.budgetCents,
     stock_questions: plan.questions.map(q => q.text),
     missing_products: plan.missing.map(m => `${m.name}: ${m.reason}`),
   };
@@ -84,6 +86,8 @@ export const tools: Tool[] = [
       return {
         order_window: menu.window, cut_off: delivery.cutOff, hours_left: delivery.hoursLeft,
         days: menu.days.map(d => ({ date: d.date, day: d.day, in_order: d.inOrder, meal: d.meal ? { recipe_id: d.meal.id, name: d.meal.name, servings: d.meal.servings, status: d.meal.status } : null })),
+        // Wat er deze week (al besteld) gegeten wordt, tot de volgende bezorging.
+        this_week: menu.thisWeek.map(d => ({ date: d.date, day: d.day, today: d.today || undefined, ordered: d.ordered, meal: { recipe_id: d.meal.id, name: d.meal.name, servings: d.meal.servings } })),
       };
     },
   },
@@ -224,9 +228,10 @@ export const tools: Tool[] = [
     description: 'Wat zit er nu in de Picnic-mand, wat kost het, wanneer is de wijzigdeadline en welke regels heeft Weekmand toegevoegd?',
     input: obj({}),
     run: async app => {
-      const [cart, delivery] = await Promise.all([app.cart(), app.delivery()]);
+      const [cart, delivery, placed] = await Promise.all([app.cart(), app.delivery(), app.placedOrderInfo()]);
       return {
         shop: cart.shop, total: euro(cart.totalCents), cut_off: delivery.cutOff, hours_left: delivery.hoursLeft,
+        ...(placed ? { already_ordered: { delivery: `${dayName(placed.date)} ${placed.date}`, total: euro(placed.totalCents), products: placed.count, note: 'Al afgerekend; de mand hierboven komt er nog bij.' } } : {}),
         lines: cart.lines.map(l => ({ product: l.name, pack: l.unitQuantity, quantity: l.quantity, price: euro(l.cents), added_by_weekmand: l.byWeekmand || undefined })),
       };
     },

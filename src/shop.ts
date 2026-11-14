@@ -27,6 +27,13 @@ export interface Shop {
   slots(): Promise<DeliverySlot[]>;
 }
 
+/**
+ * Een afgerekende bestelling die nog niet is bezorgd (Picnic: status CURRENT). Na het afrekenen is
+ * de Picnic-mand leeg; wat besteld is staat hier. totalCents en orders komen uit het overzicht van
+ * Picnic: veranderen die niet, dan zijn de regels ook niet veranderd.
+ */
+export type PlacedOrder = { id: string; windowStart: string; windowEnd: string; totalCents: number; orders: number; lines: CartLine[] };
+
 export const quantityOf = (cart: ShopCart, id: string) =>
   cart.lines.filter(line => line.id === id).reduce((sum, line) => sum + line.quantity, 0);
 
@@ -330,8 +337,14 @@ export class PicnicShop implements Shop {
 
   #cart(raw: Awaited<ReturnType<Client['cart']['getCart']>>): ShopCart {
     if (!raw.id || !Array.isArray(raw.items)) throw new Problem(502, 'Picnic gaf een onbekende mandindeling.');
+    const lines = this.#lines(raw.items);
+    return { id: raw.id, lines, totalCents: raw.totalPrice, recipes: (raw.recipes ?? []).map(r => ({ id: r.id, title: r.title })) };
+  }
+
+  /** Mand- of bestelregels samenvoegen per product. */
+  #lines(items: Awaited<ReturnType<Client['cart']['getCart']>>['items']): CartLine[] {
     const lines = new Map<string, CartLine>();
-    for (const item of raw.items) {
+    for (const item of items) {
       if (!item.productId || !Number.isSafeInteger(item.quantity) || item.quantity < 1) continue;
       const existing = lines.get(item.productId);
       if (existing) existing.quantity += item.quantity;
@@ -346,7 +359,7 @@ export class PicnicShop implements Shop {
       }
     }
     this.#noteImages([...lines.values()]);
-    return { id: raw.id, lines: [...lines.values()], totalCents: raw.totalPrice, recipes: (raw.recipes ?? []).map(r => ({ id: r.id, title: r.title })) };
+    return [...lines.values()];
   }
 
   readCart() { return this.#call(async c => this.#cart(await c.cart.getCart())); }
@@ -413,6 +426,27 @@ export class PicnicShop implements Shop {
   /** Alle voltooide bezorgingen met hun totaal (één verzoek), voor het budget. */
   deliverySummaries() { return this.#call(c => c.delivery.getDeliverySummaries(['COMPLETED'])); }
   delivery(id: string) { return this.#call(c => c.delivery.getDelivery(id)); }
+
+  /**
+   * Afgerekende, nog niet bezorgde bestellingen. De regels haalt Weekmand alleen opnieuw op als
+   * totaal of aantal bestellingen veranderde (`known`): dat scheelt verzoeken aan Picnic.
+   */
+  placedOrders(known: PlacedOrder[] = []) {
+    return this.#call(async c => {
+      const summaries = (await c.delivery.getDeliverySummaries(['CURRENT']))
+        .filter(s => s.status === 'CURRENT' && s.id && s.windowStart && Number.isSafeInteger(s.totalPrice)).slice(0, 3);
+      const placed: PlacedOrder[] = [];
+      for (const s of summaries) {
+        const same = known.find(k => k.id === s.id && k.totalCents === s.totalPrice && k.orders === s.orderCount);
+        if (same) { placed.push(same); continue; }
+        const d = await c.delivery.getDelivery(s.id);
+        if (d.id !== s.id) throw new Problem(502, 'Picnic gaf een onbekende bestelling terug.');
+        const lines = this.#lines(d.orders.filter(o => o.status !== 'CANCELLED').flatMap(o => o.items));
+        placed.push({ id: s.id, windowStart: d.windowStart ?? s.windowStart!, windowEnd: d.windowEnd ?? s.windowEnd ?? s.windowStart!, totalCents: s.totalPrice, orders: s.orderCount, lines });
+      }
+      return placed;
+    });
+  }
 
   savedRecipes() { return this.#call(c => c.recipe.getSavedRecipes()); }
   userRecipes() { return this.#call(c => c.recipe.getUserDefinedRecipes()); }

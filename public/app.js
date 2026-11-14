@@ -291,6 +291,101 @@ function renderHeader() {
   }
   $('version').textContent = 'Weekmand ' + S.version;
   renderUnread();
+  renderUpdateButton();
+}
+
+// ───────────── Update van GitHub ─────────────
+
+/** Pil rechtsboven zodra er op GitHub een nieuwere versie staat (of er een update loopt). */
+function renderUpdateButton() {
+  const u = S.update;
+  const show = !!(u?.available || u?.running);
+  $('update-button').hidden = !show;
+  if (!show) return;
+  $('update-button').classList.toggle('running', !!u.running);
+  $('update-label').textContent = u.running ? 'Bijwerken…' : u.version ? `Update ${u.version}` : 'Update';
+  $('update-button').setAttribute('aria-label', u.running ? 'Weekmand wordt bijgewerkt' : `Update beschikbaar: ${u.count} ${u.count === 1 ? 'wijziging' : 'wijzigingen'}`);
+}
+$('update-button').onclick = () => openUpdate().catch(e => toast(e.message, true));
+
+const longDay = new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' });
+const changeDate = iso => iso ? longDay.format(new Date(iso)) : '';
+
+/** De changenotes uit CHANGELOG.md: per versie in gewone taal wat er verandert. Open, want daar gaat het om. */
+function releaseNotes(notes) {
+  return el('div', { class: 'release-notes' },
+    ...notes.map(n => el('section', {},
+      el('h4', {}, `Versie ${n.version}`, n.date ? el('span', { class: 'meta' }, ` · ${n.date}`) : null),
+      el('ul', {}, ...n.items.map(i => el('li', {}, i))))));
+}
+
+function changelogList(changes, title = 'Wat is er nieuw') {
+  return el('details', { class: 'changelog' },
+    el('summary', {}, `${title} (${changes.length})`),
+    el('ol', {}, ...changes.map(c => el('li', {},
+      el('b', {}, c.title),
+      el('span', { class: 'meta' }, [changeDate(c.date), c.pr ? `pull request #${c.pr}` : null].filter(Boolean).join(' · ')),
+      ...c.details.map(d => el('p', { class: d.heading ? 'sub' : null }, d.text))))));
+}
+
+async function openUpdate(force = true) {
+  dialog('Update', el('p', { class: 'muted' }, 'Kijken op GitHub…'));
+  const info = await api('update/info', { force });
+  if (info.status?.state === 'running') return showUpdateProgress(info.status.commit, info.status.at);
+  const c = info.check;
+  const you = info.installed ? `Je gebruikt versie ${info.installed.version}${info.installed.at ? ` van ${changeDate(info.installed.at)}` : ''}.` : '';
+  const local = info.installed?.dirty ? el('p', { class: 'small muted' }, 'Deze versie is vanaf de pc uitgerold, met wijzigingen die (nog) niet op GitHub staan. Updaten vervangt die door de versie van GitHub.') : null;
+  const failed = info.status?.state === 'failed' ? el('p', { class: 'warn small' }, 'Vorige poging: ' + info.status.message) : null;
+  const error = c?.error ? el('p', { class: 'warn small' }, c.error) : null;
+  if (!c?.available) {
+    dialog('Update',
+      el('p', {}, el('b', {}, c?.diverged ? 'Deze versie staat niet op main.' : 'Je hebt de nieuwste versie.')), el('p', { class: 'muted small' }, you), local, failed, error,
+      el('div', { class: 'update-actions' }, btn('Opnieuw kijken', () => openUpdate().catch(e => toast(e.message, true)), 'ghost')));
+    return;
+  }
+  dialog(c.version ? `Versie ${c.version} staat klaar` : 'Update beschikbaar',
+    c.version ? el('p', {}, el('b', {}, `Van ${info.installed.version} naar ${c.version}`))
+      : el('p', {}, el('b', {}, `${c.count} ${c.count === 1 ? 'wijziging' : 'wijzigingen'} op GitHub`), ` · ${info.repo}`),
+    c.notes?.length ? releaseNotes(c.notes) : null,
+    el('p', { class: 'muted small' }, you + ' Updaten duurt een paar minuten: Weekmand maakt eerst een back-up en gaat terug naar deze versie als de nieuwe niet goed start.'),
+    local, failed, error,
+    info.canInstall
+      ? el('div', { class: 'update-actions' },
+        btn('Nu updaten', () => run(async () => { const r = await api('update/start', { sha: c.latest }); showUpdateProgress(c.latest, r.at); }), 'primary'),
+        btn('Later', closeDialog, 'ghost'))
+      : el('p', { class: 'hint' }, 'Bijwerken kan alleen op de router met de Weekmand-updater.'),
+    // Zonder changenotes is de lijst van wijzigingen de uitleg; met changenotes de technische details.
+    changelogList(c.changes, c.notes?.length ? 'Technische details' : 'Wat is er nieuw'));
+}
+
+/** Volg de updater; Weekmand start halverwege opnieuw, dan zijn een paar aanvragen mislukt. */
+function showUpdateProgress(sha, since) {
+  const step = el('span', {}, 'Update aangevraagd…');
+  dialog('Weekmand wordt bijgewerkt',
+    el('p', { class: 'update-progress' }, step),
+    el('p', { class: 'muted small' }, 'Dit duurt een paar minuten. Je kunt dit venster sluiten; de pagina herlaadt vanzelf als de nieuwe versie draait.'));
+  S.update = { ...(S.update ?? {}), running: true };
+  renderUpdateButton();
+  const started = Date.now();
+  const tick = async () => {
+    try {
+      const r = await api('update/status', {});
+      const s = r.status && (!since || r.status.at >= since) && r.status.commit === sha ? r.status : null;
+      if (r.installed?.commit === sha) { toast('Weekmand is bijgewerkt.'); setTimeout(() => location.reload(), 800); return; }
+      if (s?.state === 'failed') {
+        S.update = { ...S.update, running: false };
+        renderUpdateButton();
+        dialog('Update mislukt', el('p', { class: 'warn' }, s.message), el('p', { class: 'muted small' }, 'Je gebruikt nog de vorige versie. Er is niets verloren.'));
+        return;
+      }
+      if (s?.step) step.textContent = s.step + '…';
+    } catch {
+      step.textContent = 'Nieuwe versie starten…'; // Weekmand herstart even
+    }
+    if (Date.now() - started < 10 * 60_000) setTimeout(tick, 3000);
+    else step.textContent = 'Dit duurt langer dan verwacht. Kijk later opnieuw via de updateknop.';
+  };
+  setTimeout(tick, 3000);
 }
 
 function renderWeek() {
@@ -488,7 +583,9 @@ async function pickRecipe(date, servings) {
 
 $('propose-form').onsubmit = e => {
   e.preventDefault();
-  run(async () => { await api('menu/propose', { wish: $('wish').value, replace: $('replace').checked }); planStale = true; toast('Nieuw voorstel klaar.'); });
+  // Met een AI zoekt Weekmand ook nieuwe recepten op; dat duurt een halve minuut.
+  if (S.ai) toast('De AI stelt het menu samen en zoekt nieuwe recepten… dit duurt even.');
+  run(async () => { const r = await api('menu/propose', { wish: $('wish').value, replace: $('replace').checked }); planStale = true; toast(r.note ?? 'Nieuw voorstel klaar.'); });
 };
 $('approve-menu').onclick = () => run(async () => { const r = await api('menu/approve', {}); toast(`${r.approved} maaltijden goedgekeurd.`); });
 $('to-cart').onclick = () => { planStale = true; showTab('cart'); };
@@ -545,32 +642,80 @@ function productDialog(p) {
   }).catch(() => {});
 }
 
-/** De echte Picnic-mand, altijd zichtbaar. */
+/** De echte Picnic-mand, altijd zichtbaar: per gerecht of per afdeling, wat Weekmand en wat jij toevoegde bij elkaar. */
 let cartShown = '';
+let cartData = null;
+let cartView = (() => { try { return localStorage.getItem('weekmand-cart-view') === 'aisle' ? 'aisle' : 'meal'; } catch { return 'meal'; } })();
+
 async function loadCartLines() {
-  if (!S?.shop.ready) { cartShown = ''; put($('cart-lines'), el('p', { class: 'muted small' }, 'Niet aangemeld bij Picnic.')); return; }
+  if (!S?.shop.ready) { cartShown = ''; cartData = null; $('cart-view').hidden = true; put($('cart-lines'), el('p', { class: 'muted small' }, 'Niet aangemeld bij Picnic.')); return; }
   try {
     const cart = await api('cart', {});
     const shown = JSON.stringify(cart);
     if (shown === cartShown && $('cart-lines').childElementCount) return;
     cartShown = shown;
-    const mine = cart.lines.reduce((n, l) => n + (l.byWeekmand ? 1 : 0), 0);
-    const photos = cart.lines.some(l => l.image);
-    put($('cart-lines'),
-      el('p', {}, el('b', {}, `${cart.lines.reduce((n, l) => n + l.quantity, 0)} producten · ${money(cart.totalCents)}`),
-        el('span', { class: 'muted small' }, mine ? ` · ${mine} regels door Weekmand toegevoegd` : '')),
-      ...cart.lines.map(l => {
-        const who = l.byWeekmand ? (l.byWeekmand === l.quantity ? 'Weekmand' : `${l.byWeekmand} door Weekmand`) : 'zelf';
-        const context = `${l.quantity}× in je Picnic-mand · ${l.byWeekmand ? (l.byWeekmand === l.quantity ? 'door Weekmand' : `${l.byWeekmand} door Weekmand`) : 'zelf toegevoegd'}`;
-        return el('button', { type: 'button', class: 'product-row', 'aria-label': `${l.quantity}× ${l.name}, ${l.unitQuantity}: bekijk het product`, onclick: () => productDialog({ ...l, context }) },
-          photos ? productPhoto(l.image) : null,
-          el('span', { class: 'grow' }, el('span', { class: 'product-name' }, `${l.quantity}× ${l.name}`),
-            el('span', { class: 'muted small' }, [l.unitQuantity, l.unitPrice].filter(Boolean).join(' · '))),
-          el('span', { class: 'pill' }, who));
-      }),
-      !cart.lines.length ? el('p', { class: 'muted small' }, 'Je Picnic-mand is leeg.') : null);
-    applyListSearch('cart-lines');
+    cartData = cart;
+    renderCartLines();
   } catch (e) { cartShown = ''; put($('cart-lines'), el('p', { class: 'warn small' }, e.message)); }
+}
+
+function setCartView(view) {
+  cartView = view;
+  try { localStorage.setItem('weekmand-cart-view', view); } catch { /* geen opslag */ }
+  renderCartLines();
+}
+
+/** Groepen voor de mand. Per gerecht: een product voor één gerecht staat bij dat gerecht, voor meer gerechten apart. */
+function groupCartLines(lines, categories, view) {
+  const groups = [];
+  const add = (title, items) => { if (items.length) groups.push({ title, items }); };
+  if (view === 'aisle') {
+    for (const c of categories) add(c.label, lines.filter(l => l.category === c.key));
+    add('Overig', lines.filter(l => !categories.some(c => c.key === l.category)));
+    return groups;
+  }
+  const meals = [...new Map(lines.flatMap(l => l.meals ?? []).map(m => [m.date, m])).values()].sort((a, b) => a.date.localeCompare(b.date));
+  for (const m of meals) add(`${m.day} ${shortDate(m.date)} · ${m.name}`, lines.filter(l => l.meals?.length === 1 && l.meals[0].date === m.date));
+  add('Voor meerdere gerechten', lines.filter(l => l.meals?.length > 1));
+  add('Vaste boodschappen', lines.filter(l => !l.meals?.length && l.regular));
+  add('Overig', lines.filter(l => !l.meals?.length && !l.regular));
+  return groups;
+}
+
+function cartRow(l, view, photos, placed) {
+  const who = placed ? 'besteld' : l.byWeekmand ? (l.byWeekmand === l.quantity ? 'Weekmand' : `${l.byWeekmand} door Weekmand`) : 'zelf';
+  const context = placed ? `${l.quantity}× in je geplaatste bestelling` : `${l.quantity}× in je Picnic-mand · ${l.byWeekmand ? (l.byWeekmand === l.quantity ? 'door Weekmand' : `${l.byWeekmand} door Weekmand`) : 'zelf toegevoegd'}`;
+  // Waarvoor: per afdeling altijd; per gerecht alleen als het niet al in de kop staat.
+  const meals = l.meals ?? [];
+  const forWhat = meals.length && (view === 'aisle' || meals.length > 1) ? 'voor ' + meals.map(m => `${m.name} (${dayShort(m.date)})`).join(', ')
+    : !meals.length && view === 'aisle' && l.regular ? 'vaste boodschap' : '';
+  return el('button', { type: 'button', class: 'product-row', 'aria-label': `${l.quantity}× ${l.name}, ${l.unitQuantity}: bekijk het product`, onclick: () => productDialog({ ...l, context }) },
+    photos ? productPhoto(l.image) : null,
+    el('span', { class: 'grow' }, el('span', { class: 'product-name' }, `${l.quantity}× ${l.name}`),
+      el('span', { class: 'muted small' }, [l.unitQuantity, l.unitPrice].filter(Boolean).join(' · ')),
+      forWhat ? el('span', { class: 'for-what small' }, forWhat) : null),
+    el('span', { class: 'pill' }, who));
+}
+
+function renderCartLines() {
+  const cart = cartData;
+  if (!cart) return;
+  const placed = !cart.lines.length && cart.placed?.lines?.length ? cart.placed : null;
+  const lines = placed ? placed.lines : cart.lines;
+  $('cart-view').hidden = !lines.length;
+  put($('cart-view'), el('div', { class: 'segmented two', role: 'tablist', 'aria-label': 'Indeling van de mand' },
+    el('button', { type: 'button', role: 'tab', 'aria-selected': String(cartView === 'meal'), onclick: () => setCartView('meal') }, 'Per gerecht'),
+    el('button', { type: 'button', role: 'tab', 'aria-selected': String(cartView === 'aisle'), onclick: () => setCartView('aisle') }, 'Per afdeling')));
+  const mine = cart.lines.reduce((n, l) => n + (l.byWeekmand ? 1 : 0), 0);
+  const photos = lines.some(l => l.image);
+  put($('cart-lines'),
+    placed
+      ? el('p', {}, el('b', {}, `Je mand is leeg; al besteld voor ${dateFmt.format(new Date(placed.windowStart))}`), el('span', { class: 'muted small' }, ` · ${placed.count} producten · ${money(placed.totalCents)}`))
+      : el('p', {}, el('b', {}, `${cart.lines.reduce((n, l) => n + l.quantity, 0)} producten · ${money(cart.totalCents)}`),
+        el('span', { class: 'muted small' }, mine ? ` · ${mine} regels door Weekmand toegevoegd` : '')),
+    ...groupCartLines(lines, cart.categories ?? [], cartView).flatMap(g => [el('h4', { class: 'cart-group' }, g.title), ...g.items.map(l => cartRow(l, cartView, photos, !!placed))]),
+    !lines.length ? el('p', { class: 'muted small' }, 'Je Picnic-mand is leeg.') : null);
+  applyListSearch('cart-lines');
 }
 
 const amountNl = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 1 });
@@ -749,7 +894,10 @@ function renderPlan() {
     return;
   }
   const changes = plan.lines.filter(l => l.add || l.remove);
-  const over = plan.totalCents > plan.budgetCents;
+  // Na het afrekenen is de Picnic-mand leeg; de geplaatste bestelling telt mee.
+  const placed = plan.placed;
+  const spent = (placed?.totalCents ?? 0) + plan.totalCents;
+  const over = spent > plan.budgetCents;
   const parts = [];
   if (plan.questions.length) {
     parts.push(el('div', { class: 'card highlight' }, el('h3', {}, 'Even checken'),
@@ -758,8 +906,11 @@ function renderPlan() {
         btn('Nee, op', () => run(async () => { await api('pantry', { items: [{ name: q.key, status: 'op' }] }); await calculate(); }), 'small')))));
   }
   parts.push(el('div', { class: 'card' },
-    el('h3', {}, changes.length ? `${changes.length} ${changes.length === 1 ? 'wijziging' : 'wijzigingen'} voorgesteld` : 'Je Picnic-mand is compleet'),
-    el('p', { class: 'muted small' }, changes.length ? 'Nog niet doorgevoerd. Alleen deze verschillen gaan naar Picnic; wat je zelf in Picnic zet blijft staan.' : 'Alles wat nodig is zit al in je Picnic-mand. Afrekenen doe je in de Picnic-app.'),
+    el('h3', {}, changes.length ? `${changes.length} ${changes.length === 1 ? 'wijziging' : 'wijzigingen'} voorgesteld` : placed ? 'Je bestelling is compleet' : 'Je Picnic-mand is compleet'),
+    placed ? el('p', {}, el('b', {}, `Al besteld voor ${dateFmt.format(new Date(placed.windowStart))}`), ` · ${money(placed.totalCents)} · ${placed.count} producten`) : null,
+    el('p', { class: 'muted small' }, placed
+      ? (changes.length ? 'Dit ontbreekt nog. Stuur het naar Picnic en reken het daar vóór de deadline nog een keer af; het komt bij dezelfde bezorging.' : 'Alles voor het menu zit in je bestelling. Aanvullen kan tot de deadline in de Picnic-app.')
+      : changes.length ? 'Nog niet doorgevoerd. Alleen deze verschillen gaan naar Picnic; wat je zelf in Picnic zet blijft staan.' : 'Alles wat nodig is zit al in je Picnic-mand. Afrekenen doe je in de Picnic-app.'),
     el('p', { class: 'muted small' }, `Voor ${plan.meals.length} maaltijden: ${plan.meals.map(m => m.name).join(', ') || 'geen'}.`),
     el('div', { class: 'row' }, el('span', { class: 'muted small grow', id: 'plan-read' }, planReadText()),
       btn('Ververs uit Picnic', () => {
@@ -777,6 +928,7 @@ function renderPlan() {
         el('div', { class: 'why' }, l.reason),
         l.need !== undefined ? el('div', { class: 'why' }, [
           'nodig ' + amountText(l.need, l.unit),
+          l.orderedAmount ? 'al besteld ' + amountText(l.orderedAmount, l.unit) : null,
           l.inCartAmount ? 'al in mand ' + amountText(l.inCartAmount, l.unit) : null,
           l.stock !== null && l.stock !== undefined ? 'voorraad ' + amountText(l.stock, l.unit) : null,
         ].filter(Boolean).join(' · ')) : null),
@@ -785,9 +937,11 @@ function renderPlan() {
     ...plan.lines.filter(l => l.declined).map(l => el('div', { class: 'pantry-item' },
       el('span', { class: 'grow muted small' }, 'Overgeslagen: ' + l.product),
       btn('Ongedaan maken', () => changePlanLine('plan/undecline', l.productId, { declined: false }), 'small'))),
-    el('p', { class: over ? 'warn' : '' }, `Mand daarna ${money(plan.totalCents)} van ${money(plan.budgetCents)} budget${over ? ' — boven budget' : ''}`),
-    el('div', { class: 'budget' + (over ? ' over' : '') }, budgetFill(Math.min(100, plan.totalCents / plan.budgetCents * 100))),
-    plan.lines.length > changes.length ? el('p', { class: 'muted small' }, `${plan.lines.length - changes.length} regels staan al goed in de mand.`) : null,
+    el('p', { class: over ? 'warn' : '' }, placed
+      ? `Besteld ${money(placed.totalCents)} + mand ${money(plan.totalCents)}: samen ${money(spent)} van ${money(plan.budgetCents)} budget${over ? ' — boven budget' : ''}`
+      : `Mand daarna ${money(plan.totalCents)} van ${money(plan.budgetCents)} budget${over ? ' — boven budget' : ''}`),
+    el('div', { class: 'budget' + (over ? ' over' : '') }, budgetFill(Math.min(100, spent / plan.budgetCents * 100))),
+    plan.lines.length > changes.length ? el('p', { class: 'muted small' }, `${plan.lines.length - changes.length} regels staan al goed${placed ? ' in de bestelling of de mand' : ' in de mand'}.`) : null,
     ...plan.missing.map(m => el('div', { class: 'pantry-item' }, el('span', { class: 'grow warn small' }, `${m.name}: geen product gekoppeld`), btn('Koppel', () => linkDialog(m.key), 'small'))),
     changes.length ? btn(`Wijzigingen naar Picnic sturen (${changes.length})`, () => planStale ? toast('Even wachten: het voorstel wordt bijgewerkt.') : run(async () => {
       // Doorvoeren leest de mand vers. Veranderde hij in de Picnic-app, dan het nieuwe voorstel tonen.
@@ -1050,7 +1204,7 @@ function renderPantry() {
   const cart = menu.filter(inCartOnly).length;
   const cartText = cart ? `${cart} ${cart === 1 ? 'ligt' : 'liggen'} al in je mand.` : '';
   $('menu-need-hint').textContent = !menu.length ? 'Er staat nog geen menu voor deze bestelling.'
-    : short ? `${short} van de ${menu.length} ingrediënten heb je nog niet genoeg; die bestelt Weekmand. ${cartText} Klopt iets niet? Tik de regel en vul in wat je hebt.`
+    : short ? `${short} van de ${menu.length} ingrediënten heb je nog niet genoeg; ${plan?.placed ? 'die zitten in je bestelling of in het voorstel' : 'die bestelt Weekmand'}. ${cartText} Klopt iets niet? Tik de regel en vul in wat je hebt.`
       : cart ? `Alles voor het menu is in huis of ligt in je mand. ${cartText}` : 'Alles voor het menu is in huis.';
   $('pantry-menu').hidden = !menu.length;
   put($('pantry-menu'), menu.map(pantryRow));
@@ -1167,7 +1321,7 @@ async function handleCode(code) {
 
 // ───────────── Recepten ─────────────
 
-let recipeTab = 'eaten';
+let recipeTab = 'week';
 let recipeQuery = '';
 let recipeTag = '';
 let recipeLimit = 40;
@@ -1221,13 +1375,32 @@ async function renderRecipesTab() {
   for (const b of $('recipe-tabs').querySelectorAll('[data-sub]')) b.setAttribute('aria-pressed', String(b.dataset.sub === recipeTab));
   const panel = $('recipes-panel');
   try {
-    if (recipeTab === 'eaten') await renderEaten(panel);
+    if (recipeTab === 'week') renderThisWeek(panel);
+    else if (recipeTab === 'eaten') await renderEaten(panel);
     else if (recipeTab === 'favorites') await renderFavorites(panel);
     else if (recipeTab === 'picnic') await renderPicnicCatalog(panel);
     else await renderAllCatalog(panel);
   } catch (e) {
     put(panel, el('p', { class: 'warn' }, e.message));
   }
+}
+
+/** Wat jullie eten tot de volgende bezorging: al besteld, dus om te koken en niet meer om te plannen. */
+function renderThisWeek(panel) {
+  const week = S.menu.thisWeek ?? [];
+  if (!week.length) {
+    put(panel, el('div', { class: 'empty-state' }, el('h3', {}, 'Nog niets voor deze week'),
+      el('p', { class: 'hint' }, 'Na een bestelling staan de gerechten tot de volgende bezorging hier, met het recept erbij. Plannen doe je onder Menu.')));
+    return;
+  }
+  put(panel,
+    el('p', { class: 'hint' }, 'Wat jullie eten tot de volgende bezorging. Tik op een gerecht voor de ingrediënten en de bereiding.'),
+    el('div', { class: 'list' }, week.map(d => el('div', { class: 'list-row' + (d.today ? ' today' : '') },
+      el('div', { class: 'row-main static' },
+        el('span', { class: 'date-col' }, d.today ? 'Vandaag' : fmtShort(d.date)),
+        el('span', { class: 'row-text' },
+          el('button', { type: 'button', class: 'link', onclick: () => showRecipe(d.meal.id, d.meal.servings) }, d.meal.name),
+          el('span', { class: 'row-detail' }, [`${d.meal.minutes} min`, `${num.format(d.meal.servings)} p.`, d.meal.note].filter(Boolean).join(' · '))))))));
 }
 
 async function renderEaten(panel) {

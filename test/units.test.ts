@@ -56,7 +56,7 @@ test('productnamen van Picnic herkennen als ingrediënt', async () => {
   const c = new Catalog(new Store(':memory:'));
   const cases: [string, string | undefined][] = [
     ['Picnic scharreleieren', 'ei'], ["'t Slagershuys kipdijfilets", 'kippendij'], ['De Kaaskamer jong belegen kaas 48+ plakken', 'jong-belegen-plakken'],
-    ['Picnic cheddar geraspte kaas', 'geraspte-kaas'], ['Botersla', 'sla'], ["Zoete puntpaprika's", 'paprika'], ['Picnic gezeefde tomaten met dop', 'passata'],
+    ['Picnic cheddar geraspte kaas', 'geraspte-kaas'], ['Botersla', 'sla'], ["Zoete puntpaprika's", 'puntpaprika'], ['Rode paprika', 'paprika'], ['Picnic gezeefde tomaten met dop', 'passata'],
     ['Jongens van de Klei kruimige aardappelen', 'aardappelen'], ['pindakaas', 'pindakaas'], ['krat bier', 'pils'], ['Bbq rice cookies', undefined],
   ];
   for (const [name, key] of cases) assert.equal(c.resolve(name)?.key, key, name);

@@ -249,3 +249,37 @@ export function previewRecipe(recipe: WebRecipe, catalog: Catalog): Preview {
     steps: [...recipe.steps.map((s, i) => `${i + 1}. ${s}`), ...(recipe.url ? [`Bron: ${recipe.url}`] : [])].join('\n').slice(0, 1500),
   };
 }
+
+// ───────────── Zoeken op een receptensite ─────────────
+
+/**
+ * Nieuwe recepten zoeken voor het menuvoorstel. Lekker en Simpel heeft een gewone HTML-zoekpagina en
+ * zet elk recept als schema.org/Recipe in de pagina; zo hoeven we niets na te bootsen.
+ */
+export const RECIPE_SITE = { name: 'Lekker en Simpel', host: 'www.lekkerensimpel.com', search: 'https://www.lekkerensimpel.com/?s=' };
+
+/** De receptlinks uit de zoekresultaten, in volgorde. */
+export function searchResults(html: string): string[] {
+  const links: string[] = [];
+  for (const tag of html.match(/<a\s[^>]*>/g) ?? []) {
+    if (!/class="[^"]*post-item__anchor/.test(tag)) continue;
+    const href = /href="(https:\/\/www\.lekkerensimpel\.com\/[a-z0-9-]+\/)"/.exec(tag)?.[1];
+    if (href && !links.includes(href)) links.push(href);
+  }
+  return links;
+}
+
+/** Zoek een gerecht en lees het eerste bruikbare recept (hooguit twee pagina's proberen). */
+export async function findWebRecipe(query: string, catalog: Catalog, fetcher: typeof fetch = fetch): Promise<Preview | null> {
+  const q = query.trim().slice(0, 60);
+  if (!q) return null;
+  const results = searchResults((await fetchPage(RECIPE_SITE.search + encodeURIComponent(q).replace(/%20/g, '+'), fetcher)).html);
+  for (const url of results.slice(0, 2)) {
+    try {
+      const page = await fetchPage(url, fetcher);
+      const recipe = extractRecipe(page.html, page.url);
+      if (recipe) return previewRecipe(recipe, catalog);
+    } catch { /* volgende resultaat */ }
+  }
+  return null;
+}

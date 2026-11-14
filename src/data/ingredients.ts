@@ -20,10 +20,18 @@ export const ingredients: IngredientDef[] = [
   },
   {
     key: 'paprika', name: 'Paprika', unit: 'st', pieceGrams: 150, category: 'groente-fruit',
-    query: 'paprika', aliases: ['paprika\'s'],
+    // Puntpaprika's zijn smal en dun: niet te vullen en een ander product.
+    query: 'paprika', aliases: ['paprika\'s'], avoid: ['punt'],
     packs: [
       { id: 'paprika-1', name: 'Paprika rood 1 st', amount: 1, unit: 'st', cents: 109 },
       { id: 'paprika-3', name: 'Paprika mix 3 st', amount: 3, unit: 'st', cents: 249 },
+    ],
+  },
+  {
+    key: 'puntpaprika', name: 'Puntpaprika', unit: 'st', pieceGrams: 90, category: 'groente-fruit',
+    query: 'puntpaprika', aliases: ['puntpaprika\'s', 'zoete puntpaprika', 'zoete puntpaprika\'s'],
+    packs: [
+      { id: 'puntpaprika-3', name: 'Puntpaprika\'s 2-3 st', amount: 3, unit: 'st', cents: 199 },
     ],
   },
   {

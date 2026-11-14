@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isIPv4 } from 'node:net';
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { handleAction, reasons } from './actions.ts';
 import { Weekmand } from './app.ts';
 import { Assistant } from './assistant.ts';
@@ -18,6 +18,7 @@ import { Scheduler, wireNotices } from './scheduler.ts';
 import type { StoredNotice } from './scheduler.ts';
 import { Secrets } from './secrets.ts';
 import { reviewButtons, TelegramBot } from './telegram.ts';
+import { Updates } from './update.ts';
 import { planSummary, runTool } from './tools.ts';
 
 // ───────────── Opstarten ─────────────
@@ -33,6 +34,7 @@ app.receiptMatcher = (lines, ingredients) => assistant.matchReceiptLines(lines, 
 app.productClassifier = names => assistant.classifyProducts(names);
 app.receiptReader = (image, today) => assistant.readReceiptPhoto(image, today);
 app.recipeAdapter = (recipe, note) => assistant.adaptRecipe(recipe, note);
+app.menuPlanner = input => assistant.planMenu(input);
 const publicUrl = process.env.PUBLIC_URL;
 wireNotices(app, publicUrl);
 
@@ -48,6 +50,8 @@ startTelegram();
 
 const mqtt = process.env.MQTT_URL ? new HomeAssistantBridge(app, process.env.MQTT_URL) : null;
 mqtt?.start();
+// Updates van GitHub: alleen in een uitgerolde versie (met release.json). UPDATES=off zet het uit.
+const updates = new Updates({ dataDir: dbPath === ':memory:' ? null : dirname(resolve(dbPath)), repo: process.env.UPDATE_REPO, enabled: process.env.UPDATES !== 'off' });
 const scheduler = new Scheduler(app);
 if (process.env.SCHEDULER !== 'off') scheduler.start();
 
@@ -138,6 +142,7 @@ async function state(req: IncomingMessage) {
     notices: store.get<StoredNotice[]>('notices', []).slice(0, 10),
     telegram: { configured: !!telegram, bot: telegram?.botName ?? null, chats: telegram?.chats() ?? [], share: telegram?.shareMode ?? 'changes', error: telegram?.lastError ?? null, fromEnv: !!process.env.TELEGRAM_BOT_TOKEN },
     mqtt: { configured: !!mqtt, connected: mqtt?.connected ?? false, error: mqtt?.lastMessage ?? null },
+    update: updates.summary(),
     history: store.get('picnicHistory', null),
     tags: [...new Set(app.catalog.recipes().flatMap(r => r.tags))].sort(),
     ingredients: app.catalog.ingredients().map(i => ({ key: i.key, name: i.name, unit: i.unit, category: i.category })),
@@ -265,6 +270,10 @@ const ui: Record<string, Handler> = {
   'telegram/share': (i, req) => { requireConfigure(req); check(telegram, 'Geen Telegram-bot ingesteld.'); telegram.setShareMode(String(i.mode)); return {}; },
   'telegram/remove': (_i, req) => { requireConfigure(req); secrets.set('telegramToken', undefined); startTelegram(); return {}; },
   'telegram/test': async () => { check(telegram, 'Geen Telegram-bot ingesteld.'); await telegram.broadcast({ text: 'Testbericht van Weekmand. Werkt!' }); return {}; },
+  // Updatevenster: wat draait er, wat staat er nieuwer op GitHub, en de updater op de router vragen.
+  'update/info': async i => updates.info(i.force === true),
+  'update/start': i => updates.request(i.sha),
+  'update/status': () => ({ installed: updates.installed(), status: updates.status() }),
   'cutoff/test': async () => { const { cutoffNotice } = await import('./actions.ts'); const n = await cutoffNotice(app); check(n, 'Geen bezorgmoment bekend.'); app.notify({ ...n, key: undefined }); return n; },
   token: (_i, req) => { requireConfigure(req); return { token: secrets.apiToken() }; },
   'account/create': i => ({ name: accounts.create(i.name, i.password) }),

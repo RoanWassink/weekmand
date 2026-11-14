@@ -10,8 +10,8 @@ import { allowedOn, allowedRecipes, buildPlan, mealNeeds, parseWish, portions, p
 import type { Extra, OrderOptions, Plan, PlanMeal, ProductOption, Regular } from './planner.ts';
 import type { Secrets } from './secrets.ts';
 import { applyChange, MockShop, PicnicShop, quantityOf, SelfShop } from './shop.ts';
-import type { Shop } from './shop.ts';
-import { addDays, dayName, isoWeek, localDate, weekday, weekdays } from './time.ts';
+import type { PlacedOrder, Shop } from './shop.ts';
+import { addDays, clock, dayName, isoWeek, localDate, weekday, weekdays } from './time.ts';
 import type { AvoidRule, BaseUnit, Category, DeliverySlot, Household, IngredientDef, Meal, PantryItem, Recipe, ShopCart, ShopProduct } from './types.ts';
 import { convert, euro, formatAmount, packAmount, parseUnitQuantity, toBase } from './units.ts';
 import { adjustmentLine, bonusPerLine, budgetCategories, budgetFor, categoryFromCatalog, categoryKeys, kindKeys, kindOf, labelKey, matchDiscounts, periodRange, priceChanges, ruleCategory, shopName, summarize, toCsv } from './budget.ts';
@@ -22,7 +22,7 @@ import { AH_LOGIN_URL, AlbertHeijn } from './ah.ts';
 import type { AhDiscount, AhReceiptLine } from './ah.ts';
 import { Lidl } from './lidl.ts';
 import type { LidlLine } from './lidl.ts';
-import { extractRecipe, fetchPage, previewRecipe, recipeFromText } from './recipe-import.ts';
+import { extractRecipe, fetchPage, findWebRecipe, previewRecipe, RECIPE_SITE, recipeFromText } from './recipe-import.ts';
 import type { Preview } from './recipe-import.ts';
 
 export const defaultHousehold: Household = { adults: 2, children: 0, toddlers: 0, budget: 80, vegetarian: false, exclude: [], days: 5 };
@@ -55,6 +55,15 @@ export const receiptKey = (name: string) => name.trim().toLowerCase().replace(/\
 export type AdaptedRecipe = { name: string; minutes?: number; steps?: string; tags?: string[]; ingredients: { name: string; amount: number; unit: string; category?: string }[] };
 /** Past een recept aan volgens een opmerking; null: geen AI gekoppeld. */
 export type RecipeAdapter = (recipe: { name: string; minutes: number; steps: string; tags: string[]; ingredients: { name: string; amount: number; unit: string }[] }, note: string) => Promise<AdaptedRecipe | null>;
+/** Wat de AI krijgt om het menu samen te stellen. */
+export type MenuRequest = {
+  today: string; dates: { date: string; day: string }[]; household: string; wish: string;
+  recent: string[]; favorites: string[]; disliked: string[]; known: { id: string; name: string; tags: string[] }[];
+};
+/** Per dag een bekend recept, of een nieuw gerecht met een zoekterm voor een receptensite. */
+export type MenuIdea = { date: string; recipeId: string } | { date: string; name: string; query: string; tags: string[] };
+/** Stelt het menu samen met een AI; null: geen AI gekoppeld. */
+export type MenuPlanner = (input: MenuRequest) => Promise<MenuIdea[] | null>;
 export type ProductClassifier = (names: string[]) => Promise<{ name: string; category: BudgetCategory; kind: SpendKind }[] | null>;
 type BudgetPrefs = { monthCents?: number; limits?: Partial<Record<BudgetCategory, number>> };
 /** De laatste mandberekening met de Picnic-mand waarmee hij gemaakt is, voor na een herstart. */
@@ -63,6 +72,12 @@ const categories: Category[] = ['groente-fruit', 'aardappel', 'vlees', 'vis', 'v
 
 
 /** Productnaam zonder maat: 'Kippendijfilet 800 g' en 'Kippendijfilet 400 g' zijn hetzelfde product. */
+/** Past dit product bij het ingrediënt? Niet als de naam een "niet dit"-woord bevat (puntpaprika is geen paprika om te vullen). */
+export function acceptable(def: IngredientDef, productName: string) {
+  const words = normalize(productName);
+  return !(def.avoid ?? []).some(w => words.includes(normalize(w)));
+}
+
 export function baseName(name: string) {
   const sizeWords = /\b(x|g|gr|gram|kg|kilo|ml|cl|l|liter|st|stuk|stuks|ca|xl|pack|voordeelverpakking|voordeelpak|grootverpakking|familieverpakking)\b/g;
   return normalize(name.replace(/\d+(?:[.,]\d+)?/g, ' ')).replace(sizeWords, ' ').replace(/\s+/g, ' ').trim();
@@ -73,6 +88,12 @@ export function baseName(name: string) {
  * dag vanzelf. "Ververs uit Picnic" en doorvoeren lezen altijd vers.
  */
 export const PICNIC_READ_INTERVAL = 12 * 36e5;
+
+/** Kort overzicht van een afgerekende bestelling, voor het voorstel, de chat en de webapp. */
+const placedView = (o: PlacedOrder) => ({
+  id: o.id, date: localDate(Date.parse(o.windowStart)), windowStart: o.windowStart, totalCents: o.totalCents,
+  count: o.lines.reduce((n, l) => n + l.quantity, 0),
+});
 /**
  * Productkennis die met Weekmand meekomt (scripts/export-products.mjs): AH-verpakkingen per
  * kassa-id en de indeling van productnamen. Scheelt andere installaties verzoeken aan AH en de AI.
@@ -111,6 +132,8 @@ export class Weekmand {
   /** De laatst gelezen mand. Wijzigingen in Weekmand zelf (overslaan, extra's) hoeven Picnic niet opnieuw te lezen. */
   #cartRead: { at: number; shop: Shop; cart: ShopCart } | null = null;
   #cartEpoch = 0;
+  /** De mand is net afgerekend: bij de volgende berekening de bestellingen vers lezen. */
+  #checkedOut = false;
   /** Of er een mandberekening in de database staat (planSnapshot), zodat wijzigingen hem kunnen wissen. */
   #snapshot = false;
   #planRuns = 0;
@@ -122,6 +145,10 @@ export class Weekmand {
   productClassifier?: ProductClassifier;
   /** Past een recept aan volgens een opmerking ("met kippenpoten"); gezet door de assistent. */
   recipeAdapter?: RecipeAdapter;
+  /** Stelt het weekmenu samen met de AI (bekende en nieuwe gerechten); gezet door de assistent. */
+  menuPlanner?: MenuPlanner;
+  /** Zoekt een nieuw gerecht op een receptensite (tests vervangen dit). */
+  webRecipe: (query: string) => Promise<Preview | null> = query => findWebRecipe(query, this.catalog);
   /** Leest een foto van een kassabon; gezet door de assistent. null: geen AI. */
   receiptReader?: (image: ImageInput, today: string) => Promise<ReceiptPhoto | null>;
   #spendSync: Promise<{ added: number; detailed: number; errors: string[] }> | null = null;
@@ -263,13 +290,15 @@ export class Weekmand {
     const now = this.now();
     const open = (s: DeliverySlot) => s.available && Date.parse(s.cutOff) > now;
     const selected = slots.find(s => s.selected && Date.parse(s.cutOff) > now) ?? null;
+    this.#advanceAfterOrder(slots);
     const choice = this.deliveryChoice;
     let next: DeliverySlot | null;
     if (choice) {
       // Zelf gekozen bezorgdag: het gekozen moment, anders het geselecteerde of eerste moment op die dag.
       // Heeft Picnic die dag nog niet vrijgegeven, dan is er nog geen moment (en dus nog geen deadline).
       const onDay = slots.filter(s => open(s) && localDate(Date.parse(s.windowStart)) === choice.date);
-      next = onDay.find(s => s.id === choice.slotId) ?? onDay.find(s => s.selected) ?? onDay[0] ?? null;
+      next = onDay.find(s => s.id === choice.slotId) ?? (choice.time ? onDay.find(s => clock(s.windowStart) === choice.time) : undefined)
+        ?? onDay.find(s => s.selected) ?? onDay[0] ?? null;
     } else {
       next = selected ?? slots.find(open) ?? null;
     }
@@ -281,10 +310,44 @@ export class Weekmand {
     };
   }
 
-  /** De zelf gekozen bezorgdag (en eventueel moment); vervalt vanzelf als de dag voorbij is. */
-  get deliveryChoice(): { date: string; slotId?: string } | null {
-    const choice = this.store.get<{ date: string; slotId?: string } | null>('deliveryChoice', null);
+  /** De zelf gekozen bezorgdag (en eventueel moment of tijd); vervalt vanzelf als de dag voorbij is. */
+  get deliveryChoice(): { date: string; slotId?: string; time?: string } | null {
+    const choice = this.store.get<{ date: string; slotId?: string; time?: string } | null>('deliveryChoice', null);
     return choice && choice.date >= localDate(this.now()) ? choice : null;
+  }
+
+  /**
+   * Is de bestelling voor de bezorgdag geplaatst en de wijzigdeadline voorbij, dan plant Weekmand
+   * voor dezelfde dag een week later, op dezelfde tijd. Die week blijft zo de geschiedenis; menu en
+   * voorstel gaan over de volgende. Zonder eigen keuze telt de laatst geplaatste Picnic-bestelling.
+   */
+  #advanceAfterOrder(slots: DeliverySlot[]) {
+    if (this.shopMode !== 'picnic' || !slots.length) return;
+    const now = this.now();
+    const openOn = (date: string) => slots.some(s => s.available && Date.parse(s.cutOff) > now && localDate(Date.parse(s.windowStart)) === date);
+    const placed = this.store.get<{ orders: PlacedOrder[] } | null>('placedOrders', null)?.orders ?? [];
+    const choice = this.deliveryChoice;
+    let from: string;
+    let time: string | undefined;
+    if (choice) {
+      if (openOn(choice.date)) return;
+      const order = placed.find(o => localDate(Date.parse(o.windowStart)) === choice.date);
+      const delivered = this.store.get<PicnicHistory | null>('picnicHistory', null)?.deliveries.some(d => d.date === choice.date);
+      if (!order && !delivered && !this.store.meals(choice.date, addDays(choice.date, 6)).some(m => m.ordered)) return;
+      from = choice.date;
+      time = order ? clock(order.windowStart) : choice.time;
+    } else {
+      const last = placed.map(o => ({ date: localDate(Date.parse(o.windowStart)), time: clock(o.windowStart) }))
+        .filter(o => !openOn(o.date)).sort((a, b) => b.date.localeCompare(a.date))[0];
+      if (!last) return;
+      ({ date: from, time } = last);
+    }
+    const next = addDays(from, 7);
+    if (this.store.get<string | null>('advancedFrom', null) === from || next <= localDate(now)) return;
+    this.store.set('advancedFrom', from);
+    this.store.set('deliveryChoice', { date: next, ...(time ? { time } : {}) });
+    console.log(`Bezorging van ${from} is besteld; Weekmand plant nu voor ${next}${time ? ' om ' + time : ''}.`);
+    this.changed();
   }
 
   /**
@@ -374,7 +437,7 @@ export class Weekmand {
     const start = this.shopMode === 'self' ? this.deliveryChoice?.date ?? today : deliveryDate > today ? deliveryDate : addDays(today, 1);
     const days = this.household.days;
     // Voorstellen vullen `days` avonden; de bestelling dekt alle geplande maaltijden in de week vanaf de bezorging.
-    return { start, end: addDays(start, 6), dates: Array.from({ length: days }, (_, i) => addDays(start, i)), slot: next };
+    return { start, end: addDays(start, 6), dates: Array.from({ length: days }, (_, i) => addDays(start, i)), slot: next, deliveryDate };
   }
 
   // ───────────── Menu ─────────────
@@ -385,17 +448,24 @@ export class Weekmand {
     const w = await this.window();
     const today = localDate(this.now());
     const meals = this.store.meals(today, w.end);
-    const byDate = new Map(meals.map(m => [m.date, m]));
-    const dates = [...new Set([...meals.map(m => m.date), ...w.dates])].sort();
+    // Al bestelde dagen vóór deze bestelling hoeven niet meer gepland: die staan onder Recepten → Deze week.
+    const planning = meals.filter(m => !(m.date < w.start && m.ordered));
+    const byDate = new Map(planning.map(m => [m.date, m]));
+    const dates = [...new Set([...planning.map(m => m.date), ...w.dates])].sort();
+    const view = (meal: Meal) => {
+      const recipe = this.catalog.recipe(meal.recipeId);
+      return recipe ? { ...this.#recipeView(recipe), servings: meal.servings, status: meal.status, note: meal.note ?? null } : null;
+    };
     return {
       window: { start: w.start, end: w.end, deliverySlot: w.slot },
       days: dates.map(date => {
         const meal = byDate.get(date);
-        const recipe = meal ? this.catalog.recipe(meal.recipeId) : undefined;
-        return {
-          date, day: dayName(date), inOrder: date >= w.start && date <= w.end,
-          meal: meal && recipe ? { ...this.#recipeView(recipe), servings: meal.servings, status: meal.status, note: meal.note ?? null } : null,
-        };
+        return { date, day: dayName(date), inOrder: date >= w.start && date <= w.end, meal: meal ? view(meal) : null };
+      }),
+      // Wat jullie deze week eten (tot de volgende bezorging): om te koken, niet meer om te plannen.
+      thisWeek: meals.filter(m => m.date < w.start).flatMap(m => {
+        const meal = view(m);
+        return meal ? [{ date: m.date, day: dayName(m.date), today: m.date === today, ordered: !!m.ordered, meal }] : [];
       }),
     };
   }
@@ -422,27 +492,127 @@ export class Weekmand {
   recipeCost(recipe: Recipe) { return recipeCost(recipe, k => this.#costOptions(k), k => this.catalog.ingredient(k)); }
 
   /** Stel een weekmenu voor. Goedgekeurde of handmatig gekozen maaltijden blijven staan. */
-  async proposeMenu(input: { wish?: string; days?: number; replace?: boolean } = {}) {
+  /**
+   * Menu voorstellen voor de open dagen. Met een AI stelt die de week samen: een paar bekende
+   * recepten en nieuwe gerechten, die Weekmand op een receptensite zoekt (of de AI zelf schrijft).
+   * Zonder AI (of als die faalt) kiest Weekmand uit de eigen recepten. `ai: false` slaat de AI over.
+   */
+  async proposeMenu(input: { wish?: string; days?: number; replace?: boolean; ai?: boolean } = {}) {
     if (input.days !== undefined) this.setHousehold({ days: input.days });
     const w = await this.window();
     const existing = this.store.meals(w.dates[0], w.dates.at(-1)!);
     const fixed: Record<string, string> = {};
-    for (const m of existing) if (m.status === 'approved' || !input.replace) fixed[m.date] = m.recipeId;
-    const recent = this.store.recentRecipeIds(addDays(w.start, -14), w.start);
+    // Goedgekeurde en al bestelde gerechten blijven altijd staan.
+    for (const m of existing) if (m.status === 'approved' || m.ordered || !input.replace) fixed[m.date] = m.recipeId;
+    const recent = this.store.recentRecipeIds(addDays(w.start, -21), w.start);
     const wish = parseWish(input.wish ?? '', word => word.length > 2 ? this.catalog.resolve(word)?.key : undefined);
+    // Pas voorgesteld (en weer vervangen): minder kans, zodat opnieuw voorstellen echt iets anders geeft.
+    const proposed = this.#recentlyProposed();
+    let base = fixed;
+    let note: string | undefined;
+    if (input.ai !== false && this.menuPlanner && w.dates.some(d => !fixed[d])) {
+      // De AI hoort ook wat pas is voorgesteld (en weer vervangen), zodat hij niet hetzelfde terugzet.
+      const ai = await this.#proposeWithAi(w.dates, fixed, input.wish ?? '', wish, [...recent, ...proposed]).catch(error => { console.error('Menu met AI:', (error as Error).message); return null; });
+      if (ai) { base = ai.chosen; note = ai.note; }
+      else note = 'De AI gaf nu geen bruikbaar menu; Weekmand koos uit je eigen recepten.';
+    }
     const chosen = proposeMenu({
-      recipes: this.#withFavorites(this.catalog.recipes()), dates: w.dates, fixed, household: this.household, avoid: this.avoid, recent, wish,
-      costPerPortion: r => this.recipeCost(r), ingredient: k => this.catalog.ingredient(k), seed: randomUUID(), bonus: r => this.#ratingBonus(r, recent),
+      recipes: this.#withFavorites(this.catalog.recipes()), dates: w.dates, fixed: base, household: this.household, avoid: this.avoid, recent, wish,
+      costPerPortion: r => this.recipeCost(r), ingredient: k => this.catalog.ingredient(k), seed: randomUUID(),
+      bonus: r => this.#ratingBonus(r, recent) - (proposed.has(r.id) ? 2.5 : 0),
     });
     const servings = portions(this.household);
+    const added: string[] = [];
     this.store.tx(() => {
       for (const [date, recipeId] of Object.entries(chosen)) {
         if (fixed[date]) continue;
         this.store.saveMeal({ date, recipeId, servings, status: 'proposed' });
+        added.push(recipeId);
       }
     });
+    this.store.update<{ id: string; at: number }[]>('proposalHistory', [], list => [...added.map(id => ({ id, at: this.now() })), ...list].slice(0, 80));
     this.changed();
-    return this.menu();
+    return { ...(await this.menu()), ...(note ? { note } : {}) };
+  }
+
+  #recentlyProposed() {
+    return new Set(this.store.get<{ id: string; at: number }[]>('proposalHistory', []).filter(p => this.now() - p.at >= 0 && this.now() - p.at < 7 * day).map(p => p.id));
+  }
+
+  /** De AI stelt de open dagen samen; nieuwe gerechten zoekt Weekmand op (hooguit drie tegelijk). */
+  async #proposeWithAi(dates: string[], fixed: Record<string, string>, wishText: string, wish: ReturnType<typeof parseWish>, recent: string[]) {
+    const open = dates.filter(d => !fixed[d]);
+    const h = this.household;
+    const pool = allowedRecipes(this.#withFavorites(this.catalog.recipes()), h, this.avoid, wish);
+    const name = (id: string) => this.catalog.recipe(id)?.name ?? id;
+    const ratings = [...this.#latestRatings()];
+    const people = [`${h.adults} volwassenen`, h.children ? `${h.children} kinderen` : '', h.toddlers ? `${h.toddlers} peuter(s)` : ''].filter(Boolean).join(', ');
+    const request: MenuRequest = {
+      today: localDate(this.now()),
+      dates: open.map(date => ({ date, day: dayName(date) })),
+      household: [people, h.vegetarian ? 'vegetarisch' : '', h.exclude.length ? 'zonder ' + h.exclude.map(k => this.catalog.ingredient(k)?.name ?? k).join(', ') : '',
+        ...this.avoid.map(r => this.describeRule(r))].filter(Boolean).join('; '),
+      wish: wishText.slice(0, 300),
+      recent: [...new Set([...recent, ...Object.values(fixed)])].map(name).slice(0, 30),
+      favorites: ratings.filter(([, r]) => r.rating === 1).map(([id]) => name(id)).slice(0, 20),
+      disliked: ratings.filter(([, r]) => r.rating === -1).map(([id, r]) => name(id) + (r.reason ? ` (${r.reason})` : '')).slice(0, 20),
+      known: pool.slice(0, 150).map(r => ({ id: r.id, name: r.name, tags: r.tags.slice(0, 5) })),
+    };
+    const ideas = await withTimeout(this.menuPlanner!(request), 60_000);
+    if (!ideas?.length) return null;
+    const chosen = { ...fixed };
+    const used = new Set(Object.values(chosen));
+    const fits = (r: Recipe, date: string) => !used.has(r.id) && allowedRecipes([r], h, this.avoid, wish).length > 0 && allowedOn(r, date, this.avoid);
+    let known = 0, web = 0, written = 0;
+    const fresh: Extract<MenuIdea, { name: string }>[] = [];
+    for (const idea of ideas) {
+      if (!open.includes(idea.date) || chosen[idea.date]) continue;
+      if ('recipeId' in idea) {
+        const r = pool.find(p => p.id === idea.recipeId);
+        if (r && fits(r, idea.date)) { chosen[idea.date] = r.id; used.add(r.id); known++; }
+      } else fresh.push(idea);
+    }
+    const made = await mapLimit(fresh, 3, idea => this.#newRecipe(idea).catch(error => { console.error('Nieuw recept', idea.name + ':', (error as Error).message); return null; }));
+    fresh.forEach((idea, i) => {
+      const found = made[i];
+      if (!found || !fits(found.recipe, idea.date)) return;
+      chosen[idea.date] = found.recipe.id;
+      used.add(found.recipe.id);
+      if (found.how === 'web') web++; else if (found.how === 'ai') written++; else known++;
+    });
+    if (!known && !web && !written) return null;
+    const fresh2 = web + written;
+    const how = [web ? `${web} van ${RECIPE_SITE.name}` : '', written ? `${written} door de AI geschreven` : ''].filter(Boolean).join(', ');
+    const rest = open.length - known - fresh2;
+    const note = `Menu met AI: ${fresh2} ${fresh2 === 1 ? 'nieuw gerecht' : 'nieuwe gerechten'}${how ? ` (${how})` : ''} en ${known} uit je eigen recepten.` +
+      (rest > 0 ? ` ${rest} ${rest === 1 ? 'dag' : 'dagen'} vulde Weekmand zelf aan.` : '');
+    return { chosen, note };
+  }
+
+  /** Een nieuw gerecht: eerst op de receptensite, anders laat Weekmand de AI het recept schrijven. */
+  async #newRecipe(idea: { name: string; query: string; tags: string[] }): Promise<{ recipe: Recipe; how: 'web' | 'ai' | 'known' } | null> {
+    const same = this.catalog.recipes().find(r => normalize(r.name) === normalize(idea.name));
+    if (same) return { recipe: same, how: 'known' };
+    const preview = await this.webRecipe(idea.query || idea.name).catch(() => null);
+    if (preview) {
+      const before = preview.url ? this.catalog.recipes().find(r => r.steps.includes('Bron: ' + preview.url)) : undefined;
+      if (before) return { recipe: before, how: 'web' };
+      const lines = preview.lines.filter(l => l.status !== 'overgeslagen' && l.amount > 0).slice(0, 30);
+      if (lines.length >= 2) {
+        const recipe = this.catalog.addRecipe({
+          name: preview.name, minutes: preview.minutes, steps: preview.steps,
+          tags: [...new Set([...preview.tags.map(t => t.toLowerCase()), ...idea.tags, 'online'])].slice(0, 10),
+          ingredients: lines.map(l => ({ name: l.key ? this.catalog.ingredient(l.key)?.name ?? l.name : l.name, amount: l.amount, unit: l.unit })),
+        }, 'web');
+        return { recipe, how: 'web' };
+      }
+    }
+    if (!this.recipeAdapter) return null;
+    const adapted = await this.recipeAdapter({ name: idea.name, minutes: 30, steps: '', tags: idea.tags, ingredients: [] }, `Schrijf het recept voor "${idea.name}" als avondeten.`);
+    if (!adapted) return null;
+    let id = slug(adapted.name) || 'recept';
+    for (let n = 2; this.catalog.recipe(id); n++) id = `${slug(adapted.name).slice(0, 56)}-${n}`;
+    return { recipe: this.catalog.addRecipe({ ...adapted, id, tags: [...new Set([...(adapted.tags ?? []), ...idea.tags])].slice(0, 10) }, 'ai'), how: 'ai' };
   }
 
   #reject(meal: Meal) {
@@ -864,6 +1034,7 @@ export class Weekmand {
 
   /** Producten die in minstens 3 weken en 60% van de weken voorkomen. */
   #deriveRegulars(history: PicnicHistory) {
+    const unitCents = (i: { cents?: number; quantity: number }) => i.cents && i.quantity ? Math.round(i.cents / i.quantity) : 0;
     const weeks = new Map<string, Map<string, number>>();
     for (const d of history.deliveries) {
       const week = isoWeek(d.date);
@@ -873,7 +1044,8 @@ export class Weekmand {
     }
     const span = weeks.size;
     if (span < 3) return;
-    const info = new Map(history.deliveries.flatMap(d => d.orders.flatMap(o => o.items.map(i => [i.productId, i] as const))));
+    // Nieuwste bezorging wint (naam, maat en prijs van nu).
+    const info = new Map([...history.deliveries].reverse().flatMap(d => d.orders.flatMap(o => o.items.map(i => [i.productId, i] as const))));
     const counts = new Map<string, number[]>();
     for (const lines of weeks.values()) for (const [id, q] of lines) counts.set(id, [...(counts.get(id) ?? []), q]);
     this.store.update<Regular[]>('regulars', [], list => {
@@ -882,8 +1054,10 @@ export class Weekmand {
         const sorted = [...qs].sort((a, b) => a - b);
         const item = info.get(id)!;
         const key = this.#productKey(id, item.name);
-        list.push({ productId: id, name: item.name, unitQuantity: item.pack, cents: 0, quantity: sorted[Math.floor(sorted.length / 2)], enabled: false, weeks: qs.length, ...(key ? { key } : {}) });
+        list.push({ productId: id, name: item.name, unitQuantity: item.pack, cents: unitCents(item), quantity: sorted[Math.floor(sorted.length / 2)], enabled: false, weeks: qs.length, ...(key ? { key } : {}) });
       }
+      // Zonder prijs telde een vast product als € 0,00 in het totaal: de prijs van de laatste bezorging.
+      for (const r of list) if (!r.cents && info.has(r.productId)) r.cents = unitCents(info.get(r.productId)!);
       return list;
     });
   }
@@ -986,7 +1160,7 @@ export class Weekmand {
     const options: ProductOption[] = [];
     for (const r of results) {
       const amount = packAmount(r.unitQuantity, def);
-      if (!amount || !(r.available || r.id === link.productId) || baseName(r.name) !== base || options.some(o => o.id === r.id)) continue;
+      if (!amount || !(r.available || r.id === link.productId) || baseName(r.name) !== base || options.some(o => o.id === r.id) || !acceptable(def, r.name)) continue;
       options.push({ id: r.id, name: r.name, unitQuantity: r.unitQuantity, cents: r.cents, packAmount: amount, ...(r.tiers?.length ? { tiers: r.tiers } : {}) });
     }
     if (!options.some(o => o.id === link.productId)) options.unshift({ id: link.productId, name: link.name, unitQuantity: link.unitQuantity, cents: link.cents, packAmount: link.packAmount });
@@ -1004,6 +1178,16 @@ export class Weekmand {
     if (this.shopMode !== 'picnic' || !this.picnic.ready()) return;
     const misses = this.store.get<Record<string, number>>('linkMisses', {});
     const variants = this.store.get<Record<string, { at: number }>>('variants', {});
+    // Een automatische koppeling met een woord dat een ander product betekent (puntpaprika voor
+    // paprika) opnieuw zoeken. Zelf gekozen producten blijven staan.
+    for (const k of keys) {
+      const link = this.store.link(k);
+      const def = this.catalog.ingredient(k);
+      if (link?.auto && def && !acceptable(def, link.name)) {
+        this.store.deleteLink(k);
+        this.store.update<Record<string, unknown>>('variants', {}, v => { const { [k]: _gone, ...rest } = v; return rest; });
+      }
+    }
     const missing = keys.filter(k => !this.store.link(k) && !(misses[k] && this.now() - misses[k] < day)).slice(0, 12);
     const stale = refresh ? keys.filter(k => this.store.link(k) && this.now() - (variants[k]?.at ?? 0) > 20 * 36e5).slice(0, 6) : [];
     let searched = 0;
@@ -1023,7 +1207,9 @@ export class Weekmand {
       for (const r of results) this.#searchCache.set(r.id, r);
       let link = this.store.link(key);
       if (!link) {
-        const match = results.find(r => r.available && packAmount(r.unitQuantity, def));
+        // Liefst een product dat precies dit ingrediënt is ("Rode paprika"), anders het eerste dat past.
+        const fits = results.filter(r => r.available && packAmount(r.unitQuantity, def) && acceptable(def, r.name));
+        const match = fits.find(r => this.catalog.resolve(r.name)?.key === key) ?? fits[0];
         if (!match) { misses[key] = this.now(); continue; }
         link = { key, productId: match.id, name: match.name, unitQuantity: match.unitQuantity, packAmount: packAmount(match.unitQuantity, def)!, cents: match.cents, auto: true, updatedAt: new Date(this.now()).toISOString() };
         this.store.saveLink(link);
@@ -1063,8 +1249,14 @@ export class Weekmand {
       const ledger = this.store.get<Ledger>('ledger', { cartId: cart.id, lines: {} });
       const fresh = ledger.cartId !== cart.id || (!cart.lines.length && Object.values(ledger.lines).some(q => q > 0));
       if (fresh) {
-        // Nieuwe mand: de vorige bestelling is geplaatst. Lijst voor deze bestelling begint opnieuw.
-        this.store.set('order', { extras: [], skip: [] });
+        // Nieuwe mand: de vorige bestelling is geplaatst; de extra's zitten daarin. Bij Picnic kan dat
+        // de bestelling voor deze bezorging zijn: dan blijven overgeslagen en weggeveegde producten
+        // overgeslagen. plan() kijkt welke bestelling het is en begint anders opnieuw.
+        this.#checkedOut = this.shopMode === 'picnic';
+        const o = this.order;
+        this.store.set('order', this.shopMode === 'picnic' && (o.skip.length || o.declined?.length)
+          ? { extras: [], skip: o.skip, ...(o.declined?.length ? { declined: o.declined } : {}), placed: o.placed ?? '?' }
+          : { extras: [], skip: [] });
         const next = { cartId: cart.id, lines: {} };
         this.store.set('ledger', next);
         return next;
@@ -1078,6 +1270,56 @@ export class Weekmand {
       this.store.set('ledger', next);
       return next;
     });
+  }
+
+  /**
+   * De afgerekende Picnic-bestelling voor deze bezorgdag, of null. Na het afrekenen is de mand leeg,
+   * maar wat besteld is komt gewoon. Bewaard; opnieuw gelezen als de bewaarde lezing ouder is dan
+   * `notBefore` (de lezing van de mand), zodat mand en bestelling bij elkaar passen.
+   */
+  async #placedOrder(deliveryDate: string, notBefore: number, force = false): Promise<PlacedOrder | null> {
+    if (this.shop !== this.picnic) return null;
+    const saved = this.store.get<{ at: number; orders: PlacedOrder[] } | null>('placedOrders', null);
+    let orders = saved?.orders ?? [];
+    if (force || !saved || saved.at < notBefore || saved.at > this.now()) {
+      try {
+        orders = await this.picnic.placedOrders(orders);
+        this.store.set('placedOrders', { at: this.now(), orders });
+        // Onthouden wanneer ze komen: kort daarna haalt Weekmand de bezorging op voor de voorraad.
+        this.store.update<{ id: string; windowEnd: string }[]>('expectedDeliveries', [], list => [
+          ...orders.map(o => ({ id: o.id, windowEnd: o.windowEnd })),
+          ...list.filter(e => !orders.some(o => o.id === e.id) && this.now() - Date.parse(e.windowEnd) < 3 * day),
+        ].slice(0, 10));
+      } catch (error) {
+        // Picnic even niet bereikbaar: de vorige lezing gebruiken.
+        console.error('Geplaatste bestelling:', (error as Error).message);
+      }
+    }
+    return orders.find(o => localDate(Date.parse(o.windowStart)) === deliveryDate) ?? null;
+  }
+
+  /** Is een bestelde bezorging (bijna zeker) geweest maar nog niet bij de voorraad geteld? Dan nu ophalen. */
+  deliveryImportDue() {
+    const applied = new Set(this.store.get<string[]>('appliedDeliveries', []));
+    const now = this.now();
+    return this.store.get<{ id: string; windowEnd: string }[]>('expectedDeliveries', [])
+      .some(e => !applied.has(e.id) && now > Date.parse(e.windowEnd) + 15 * 60_000 && now - Date.parse(e.windowEnd) < 3 * day);
+  }
+
+  /** De afgerekende bestelling voor de komende bezorging, uit de laatste lezing (zonder verzoek aan Picnic). */
+  async placedOrderInfo() {
+    const found = await this.#storedPlacedOrder();
+    return found ? placedView(found) : null;
+  }
+
+  /**
+   * Overslaan en wegvegen horen bij één bestelling. Is de afgerekende bestelling voor deze bezorging,
+   * dan blijven ze gelden; is die bezorging voorbij (of was het een andere), dan begint de lijst opnieuw.
+   */
+  #settleOrder(placed: PlacedOrder | null) {
+    const o = this.order;
+    if (o.placed === undefined || o.placed === placed?.id) return;
+    this.store.set('order', o.placed === '?' && placed ? { ...o, placed: placed.id } : { extras: o.extras, skip: [] });
   }
 
   /** De mand lezen, of binnen `maxAge` ms de vorige lezing hergebruiken. */
@@ -1100,7 +1342,9 @@ export class Weekmand {
   }
 
   /** cartMaxAge: een eerdere lezing van de Picnic-mand mag zo oud zijn (ms); standaard altijd vers. */
-  async plan(options: { cartMaxAge?: number } = {}): Promise<Plan & { id: string; window: { start: string; end: string }; cartReadAt: string; meals: { date: string; day: string; name: string; servings: number }[] }> {
+  async plan(options: { cartMaxAge?: number } = {}): Promise<Plan & { id: string; window: { start: string; end: string }; cartReadAt: string; meals: { date: string; day: string; name: string; servings: number }[];
+    /** De al afgerekende bestelling voor deze bezorging (alleen Picnic). */
+    placed?: { id: string; date: string; windowStart: string; totalCents: number; count: number } }> {
     const shop = this.#requireShop();
     const generation = this.#generation;
     const run = ++this.#planRuns;
@@ -1116,15 +1360,21 @@ export class Weekmand {
     const { cart, at: cartAt } = await this.#readCart(shop, options.cartMaxAge);
     this.#rememberCartRecipes(cart);
     const ledger = this.#syncLedger(cart);
+    // Bestellingen lezen zoals de mand: even vers. Net afgerekend en nog onbekend welke bestelling: nu.
+    const force = this.#checkedOut || this.order.placed === '?';
+    this.#checkedOut = false;
+    const placed = await this.#placedOrder(w.deliveryDate, cartAt, force);
+    this.#settleOrder(placed);
     const plan = buildPlan({
       meals, household: this.household, pantry: this.store.pantry(), order: this.order, regulars: this.regulars(), avoid: this.avoid,
-      cart, ledger: ledger.lines, ingredient: k => this.catalog.ingredient(k), options: k => this.#options(k),
+      cart, ledger: ledger.lines, ordered: placed?.lines, ingredient: k => this.catalog.ingredient(k), options: k => this.#options(k),
       productKey: (id, name) => this.#productKey(id, name), now: this.now(),
     });
     const id = randomUUID();
     const result = {
       ...plan, id, window: { start: w.start, end: w.end }, computedAt: new Date(this.now()).toISOString(), cartReadAt: new Date(cartAt).toISOString(),
       meals: meals.map(m => ({ date: m.date, day: dayName(m.date), name: m.recipe.name, servings: m.servings })),
+      ...(placed ? { placed: placedView(placed) } : {}),
     };
     // Is intussen een nieuwere berekening gestart, dan bewaart die het overzicht; deze mag hem niet overschrijven.
     if (run === this.#planRuns) {
@@ -1217,14 +1467,59 @@ export class Weekmand {
     const { cart } = await this.#readCart(shop, maxAge);
     this.#rememberCartRecipes(cart);
     const ledger = this.#syncLedger(cart);
+    const context = await this.#lineContext();
+    // Na het afrekenen is de mand leeg: dan de geplaatste bestelling voor deze bezorging laten zien.
+    const placed = cart.lines.length ? null : await this.#storedPlacedOrder();
     return {
-      shop: shop.label, id: cart.id, totalCents: cart.totalCents, lines: cart.lines.map(l => {
+      shop: shop.label, id: cart.id, totalCents: cart.totalCents,
+      categories: budgetCategories.map(c => ({ key: c.key, label: c.label })),
+      lines: cart.lines.map(l => {
         const byWeekmand = ledger.lines[l.id] ?? 0;
         // Voor regels van Weekmand: het ingrediënt, zodat je in de webapp een ander product kunt kiezen.
         const key = byWeekmand ? this.#productKey(l.id) : undefined;
-        return { ...l, byWeekmand, ...(key ? { key } : {}) };
+        return { ...l, byWeekmand, ...(key ? { key } : {}), ...context(l.id, l.name) };
       }),
+      ...(placed ? { placed: { ...placedView(placed), lines: placed.lines.map(l => ({ ...l, byWeekmand: 0, ...context(l.id, l.name) })) } } : {}),
     };
+  }
+
+  /**
+   * Bij welke gerechten en welke afdeling een product hoort, voor de mand per gerecht of per afdeling.
+   * Geldt voor alles in de mand: wat Weekmand toevoegde en wat je zelf in Picnic legde.
+   */
+  async #lineContext() {
+    const w = await this.window();
+    const byKey = new Map<string, { date: string; day: string; name: string }[]>();
+    for (const m of this.store.meals(w.start, w.end)) {
+      const recipe = this.catalog.recipe(m.recipeId);
+      if (!recipe) continue;
+      for (const i of recipe.ingredients) {
+        const list = byKey.get(i.key) ?? [];
+        if (!list.some(x => x.date === m.date)) list.push({ date: m.date, day: dayName(m.date), name: recipe.name });
+        byKey.set(i.key, list);
+      }
+    }
+    const regulars = new Set(this.regulars().filter(r => r.enabled).map(r => r.productId));
+    const extras = new Set(this.order.extras.flatMap(e => e.kind === 'product' ? [e.productId] : []));
+    const label = this.#labeler();
+    return (id: string, name: string) => {
+      const ingredient = this.#productKey(id, name);
+      const def = ingredient ? this.catalog.ingredient(ingredient) : undefined;
+      return {
+        ...(ingredient ? { ingredient } : {}),
+        meals: ingredient ? (byKey.get(ingredient) ?? []).sort((a, b) => a.date.localeCompare(b.date)) : [],
+        category: def ? categoryFromCatalog(def.category) : label(name)?.category ?? 'overig',
+        ...(regulars.has(id) ? { regular: true } : {}), ...(extras.has(id) ? { extra: true } : {}),
+      };
+    };
+  }
+
+  /** De bewaarde lezing van de geplaatste bestelling voor de komende bezorging (geen verzoek aan Picnic). */
+  async #storedPlacedOrder() {
+    if (this.shop !== this.picnic) return null;
+    const { deliveryDate } = await this.window();
+    return this.store.get<{ at: number; orders: PlacedOrder[] } | null>('placedOrders', null)?.orders
+      .find(o => localDate(Date.parse(o.windowStart)) === deliveryDate) ?? null;
   }
 
   /** Picnic-recepten in de mand onthouden: na de bestelling zijn dat "bestelde" recepten. */
@@ -2336,3 +2631,18 @@ export class Weekmand {
 
 export type { BaseUnit, IngredientDef };
 export { parseUnitQuantity };
+
+/** Hooguit `limit` taken tegelijk; de uitkomsten in dezelfde volgorde. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i]); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+/** Een belofte met een tijdslimiet: daarna null. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([promise, new Promise<null>(resolve => { timer = setTimeout(resolve, ms, null); timer.unref?.(); })]).finally(() => clearTimeout(timer));
+}

@@ -1,6 +1,6 @@
 import { converse, defaultPrices, labelOf, listModels, modelOf, onUsage, providers, testConnection, visionModels } from './ai.ts';
 import type { AIConfig, ImageInput, Provider, Usage } from './ai.ts';
-import type { AdaptedRecipe, ReceiptMatch, RecipeAdapter, Weekmand } from './app.ts';
+import type { AdaptedRecipe, MenuIdea, MenuRequest, ReceiptMatch, RecipeAdapter, Weekmand } from './app.ts';
 import { budgetCategories, categoryKeys, kindKeys } from './budget.ts';
 import type { BudgetCategory, ReceiptPhoto, SpendKind } from './budget.ts';
 import { normalize } from './catalog.ts';
@@ -266,6 +266,7 @@ Geef bij per_stuk de inhoud van één stuk in de eenheid van het ingrediënt als
         return { content: 'Opgeslagen.', isError: false };
       },
       maxSteps: 2,
+      effort: 'low',
     });
     return answers;
   }
@@ -316,6 +317,7 @@ Twijfel je tussen nodig en extra, kies dan nodig. Roep deel_in precies één kee
       },
       maxSteps: 2,
       maxTokens: 4000,
+      effort: 'low',
     });
     return answers;
   }
@@ -431,8 +433,79 @@ Twijfel je tussen nodig en extra, kies dan nodig. Roep deel_in precies één kee
         return { content: 'Opgeslagen.', isError: false };
       },
       maxSteps: 3,
-      maxTokens: 3000,
+      maxTokens: 6000,
+      effort: 'low',
     });
+    return result;
+  }
+
+  /**
+   * Het avondeten voor de open dagen samenstellen: per dag een bekend recept (id) of een nieuw gerecht
+   * met een zoekterm voor een receptensite. null: er is geen AI gekoppeld of het antwoord was onbruikbaar.
+   */
+  async planMenu(input: MenuRequest): Promise<MenuIdea[] | null> {
+    const active = this.config();
+    if (!active) return null;
+    const dates = new Set(input.dates.map(d => d.date));
+    const known = new Set(input.known.map(r => r.id));
+    let result: MenuIdea[] | null = null;
+    const started = Date.now();
+    const reply = await converse(active.config, {
+      system: `Je stelt het avondeten voor een Nederlands huishouden samen. Kies voor elke gevraagde datum precies één gerecht.
+- Mix: een paar bekende recepten uit de lijst (vooral favorieten) en minstens de helft nieuwe gerechten die nog niet in de lijst staan, tenzij de wens iets anders vraagt.
+- Afwisseling: niet twee keer dezelfde keuken of hetzelfde vlees achter elkaar, geen gerecht dat recent gegeten is, niets wat is afgekeurd.
+- Past bij het seizoen en de dag: doordeweeks vooral snel (hooguit 35 minuten), in het weekend mag het meer werk zijn. Kindvriendelijk als er kinderen zijn.
+- Houd je strikt aan het dieet en de uitsluitingen.
+- Een nieuw gerecht krijgt een gewone Nederlandse naam en een zoekterm van 2 tot 4 woorden waarmee je het op een Nederlandse receptensite vindt (bijvoorbeeld "kip tikka masala", "andijvie stamppot spekjes"). Tags uit: vegetarisch, vis, kip, rund, varken, gehakt, snel, kindvriendelijk, italiaans, aziatisch, mexicaans, hollands, indiaas, soep, ovenschotel.
+Roep menu precies één keer aan.`,
+      context: JSON.stringify({ vandaag: input.today, huishouden: input.household, wens: input.wish || undefined, recent_gegeten: input.recent, favorieten: input.favorites, afgekeurd: input.disliked, bekende_recepten: input.known }),
+      history: [],
+      message: 'Stel het menu voor op: ' + input.dates.map(d => `${d.day} ${d.date}`).join(', '),
+      tools: [{
+        name: 'menu', description: 'Het menu: per datum een bekend recept of een nieuw gerecht.',
+        input: {
+          type: 'object', required: ['dagen'], additionalProperties: false,
+          properties: {
+            dagen: {
+              type: 'array', minItems: 1, maxItems: 14,
+              items: {
+                type: 'object', required: ['datum'], additionalProperties: false,
+                properties: {
+                  datum: { type: 'string', description: 'JJJJ-MM-DD' },
+                  bekend: { type: 'string', description: 'id van een bekend recept, of leeg bij een nieuw gerecht' },
+                  naam: { type: 'string', description: 'Naam van het nieuwe gerecht' },
+                  zoekterm: { type: 'string' },
+                  tags: { type: 'array', items: { type: 'string' } },
+                },
+              },
+            },
+          },
+        },
+      }],
+      run: async call => {
+        if (call.name !== 'menu') return { content: 'Onbekende tool.', isError: true };
+        const days = Array.isArray((call.input as any)?.dagen) ? (call.input as any).dagen : [];
+        const ideas: MenuIdea[] = [];
+        for (const d of days) {
+          if (!d || !dates.has(d.datum) || ideas.some(i => i.date === d.datum)) continue;
+          if (typeof d.bekend === 'string' && known.has(d.bekend)) ideas.push({ date: d.datum, recipeId: d.bekend });
+          else if (typeof d.naam === 'string' && d.naam.trim()) {
+            ideas.push({ date: d.datum, name: d.naam.trim().slice(0, 80), query: String(d.zoekterm || d.naam).trim().slice(0, 60), tags: Array.isArray(d.tags) ? d.tags.map(String).slice(0, 6) : [] });
+          }
+        }
+        if (!ideas.length) {
+          console.error('Menu met AI: onbruikbare dagen', JSON.stringify(days).slice(0, 300));
+          return { content: 'Geef voor de gevraagde datums een bekend recept-id of een naam.', isError: true };
+        }
+        result = ideas;
+        return { content: 'Opgeslagen.', isError: false };
+      },
+      maxSteps: 3,
+      // Ruim: denkende modellen gebruiken een deel voor hun redenering.
+      maxTokens: 8000,
+      effort: 'low',
+    });
+    console.log(`Menu met AI: ${result ? (result as MenuIdea[]).length + ' dagen' : 'geen menu'} in ${Math.round((Date.now() - started) / 1000)} s${result ? '' : '; antwoord: ' + String(reply).slice(0, 200)}`);
     return result;
   }
 
@@ -569,18 +642,31 @@ function parseItem(text: string) {
 }
 
 export function formatMenu(menu: Awaited<ReturnType<Weekmand['menu']>>) {
-  const lines = menu.days.map(d => `${d.day.slice(0, 2)} ${d.date.slice(8)}-${d.date.slice(5, 7)}: ${d.meal ? `${d.meal.name}${d.meal.servings !== undefined ? ` (${d.meal.servings} p.)` : ''}${d.meal.status === 'proposed' ? ' · voorstel' : ''}` : '—'}`);
-  return 'Menu:\n' + lines.join('\n');
+  const line = (d: { day: string; date: string; meal: { name: string; servings?: number; status?: string } | null }) =>
+    `${d.day.slice(0, 2)} ${d.date.slice(8)}-${d.date.slice(5, 7)}: ${d.meal ? `${d.meal.name}${d.meal.servings !== undefined ? ` (${d.meal.servings} p.)` : ''}${d.meal.status === 'proposed' ? ' · voorstel' : ''}` : '—'}`;
+  const week = menu.thisWeek.filter(d => d.ordered);
+  return [
+    ...(week.length ? ['Deze week (besteld):', ...week.map(line), ''] : []),
+    week.length ? 'Volgende bestelling:' : 'Menu:', ...menu.days.map(line),
+  ].join('\n');
 }
 
 export function formatPlan(s: ReturnType<typeof planSummary>) {
-  if (!s.changes.length) return `De mand is compleet voor ${s.window}. Totaal ${s.cart_total_after} (budget ${s.budget}).` +
-    (s.missing_products.length ? '\nNog niet gekoppeld: ' + s.missing_products.join('; ') : '');
+  const ordered = s.already_ordered;
+  const placed = ordered ? `Al besteld voor ${ordered.delivery}: ${ordered.total} (${ordered.products} producten).` : null;
+  if (!s.changes.length) {
+    return [
+      ...(placed ? [placed, `Alles voor ${s.window} zit in de bestelling${s.cart_total_after !== euro(0) ? ` of in de mand (${s.cart_total_after})` : ''}.`]
+        : [`De mand is compleet voor ${s.window}. Totaal ${s.cart_total_after} (budget ${s.budget}).`]),
+      ...(s.missing_products.length ? ['Nog niet gekoppeld: ' + s.missing_products.join('; ')] : []),
+    ].join('\n');
+  }
   const lines = s.changes.slice(0, 25).map(c => `${'add' in c ? '+' + c.add : '−' + c.remove} ${c.product} (${c.price})`);
   return [
-    `Wijzigingen voor ${s.window}:`, ...lines,
+    ...(placed ? [placed, `Dit ontbreekt nog voor ${s.window}:`] : [`Wijzigingen voor ${s.window}:`]), ...lines,
     ...(s.changes.length > 25 ? [`… en nog ${s.changes.length - 25} regels`] : []),
-    `Mand daarna: ${s.cart_total_after} (budget ${s.budget})${s.over_budget ? ' — boven budget' : ''}.`,
+    placed ? `Nieuwe mand daarna: ${s.cart_total_after}; reken die in de Picnic-app af vóór de deadline${s.over_budget ? ' (samen boven budget)' : ''}.`
+      : `Mand daarna: ${s.cart_total_after} (budget ${s.budget})${s.over_budget ? ' — boven budget' : ''}.`,
     ...(s.stock_questions.length ? ['Klopt dit nog? ' + s.stock_questions.join(' ')] : []),
     ...(s.missing_products.length ? ['Niet gevonden: ' + s.missing_products.join('; ')] : []),
   ].join('\n');

@@ -231,7 +231,9 @@ Zacht afgeronde rechthoeken: kaarten 14 px, knoppen en velden 10 px, de knoppen 
 ### Navigation
 - **Tabbalk (telefoon):** vijf gelijke kolommen, icoon van 22 px boven een label van 0.75rem; actief in Basilicum-tekst met een groen streepje bovenaan.
 - **Zijbalk (computer):** dezelfde vijf als rij met icoon en label; actief op Basilicum-zacht.
-- **Kopbalk:** Basilicumschil, 56 px; naam, winkel (verborgen onder 420 px), deadline-pil en de chatknop met een tomaatpuntje voor een nieuwe melding.
+- **Kopbalk:** Basilicumschil, 56 px; naam, winkel (verborgen onder 420 px), deadline-pil, de updatepil en de chatknop met een tomaatpuntje voor een nieuwe melding.
+- **Updatepil:** alleen als er op GitHub een nieuwere versie staat. Pil van 32 px in Basilicumschil-donker met een pijl omhoog en "Update" (onder 420 px alleen de pijl), in een raakvlak van 44 px. Geen tomaat: een update heeft geen haast. Tijdens het bijwerken "Bijwerken…" met een zacht bewegende pijl (stil bij reduced motion).
+- **Updatevenster:** dialoog met het aantal wijzigingen, één hoofdactie "Nu updaten" en "Later" (ghost). Daaronder een uitklapbare changelog ("Wat is er nieuw"): per pull request de titel, datum en uitleg, met dunne lijnen ertussen en nieuwste bovenaan.
 - **Schakelaar:** twee of drie knoppen in een bak van Oppervlak-2; de actieve ligt erboven met de Geselecteerd-schaduw.
 
 ### De weektijdlijn (signature)
