@@ -533,6 +533,14 @@ button.prod-row:hover { background: color-mix(in oklch, var(--surface-2) 70%, tr
 .day.picked .day-date { border-color: var(--brand); background: var(--brand-soft); }
 .pick-bar { position: fixed; z-index: 20; left: max(var(--s4), env(safe-area-inset-left)); right: max(var(--s4), env(safe-area-inset-right)); bottom: calc(62px + env(safe-area-inset-bottom) + var(--s3)); max-width: 40rem; margin: 0 auto; display: grid; gap: var(--s2); padding: var(--s3) var(--s4); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: 0 6px 24px oklch(0% 0 0 / .18); }
 .pick-bar .pick-count { font-weight: 650; }
+/* Gerecht bewerken: per ingrediënt naam, hoeveelheid, eenheid en weghalen; op de telefoon de naam op een eigen regel. */
+.recipe-edit .label { margin: 0; font-size: .875rem; font-weight: 550; color: var(--ink-2); }
+.edit-ingredients { display: grid; gap: var(--s2); }
+.edit-row { display: grid; grid-template-columns: minmax(0, 1fr) 5.5rem 4.75rem var(--tap); gap: var(--s2); align-items: center; }
+@media (max-width: 479px) {
+  .edit-row { grid-template-columns: minmax(0, 1fr) 4.75rem var(--tap); padding-bottom: var(--s2); border-bottom: 1px solid var(--line); }
+  .edit-row .ing-name { grid-column: 1 / -1; }
+}
 .pick-bar .hint { margin: 0; font-size: .8rem; }
 .pick-note { color: var(--ink); }
 #tab-week.picking { padding-bottom: 240px; }

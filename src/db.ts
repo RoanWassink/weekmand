@@ -112,6 +112,8 @@ export class Store {
     meal.date, meal.recipeId, meal.servings, meal.status, meal.note ?? null);
   }
   deleteMeal(date: string) { this.#run('DELETE FROM meals WHERE date = ?', date); }
+  /** Op welke dagen een recept staat (gepland of gegeten). */
+  mealDatesWithRecipe(recipeId: string): string[] { return this.#all('SELECT date FROM meals WHERE recipe_id = ?', recipeId).map(r => String(r.date)); }
   unconsumedBefore(date: string) {
     return this.#all('SELECT * FROM meals WHERE date < ? AND consumed = 0 ORDER BY date', date).map(r => this.#meal(r));
   }
