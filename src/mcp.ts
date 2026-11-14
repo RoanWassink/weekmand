@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { Weekmand } from './app.ts';
 import { Problem } from './errors.ts';
 import { runTool, tools } from './tools.ts';
@@ -7,7 +8,8 @@ import { runTool, tools } from './tools.ts';
  * Bewust zonder SDK: alleen initialize, tools/list, tools/call en ping zijn nodig, en zo blijft
  * het geheugengebruik op de router laag.
  */
-export const version = '2.0.0';
+/** Het versienummer staat op één plek: package.json. Elke versie heeft een regel in CHANGELOG.md. */
+export const version: string = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? '0.0.0';
 const supported = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const instructions = `Weekmand is de lokale boodschappenassistent van dit huishouden, gekoppeld aan Picnic.
 - Begin bij een vraag over boodschappen met get_meal_plan of review_current_cart.

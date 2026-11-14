@@ -4,6 +4,7 @@ import { Problem } from './errors.ts';
 import type { Question } from './planner.ts';
 import { clock, dayName, localDate, longDate } from './time.ts';
 import { planSummary } from './tools.ts';
+import { euro } from './units.ts';
 
 /**
  * Knoppen in meldingen werken overal hetzelfde (Telegram, webapp, Home Assistant):
@@ -83,15 +84,28 @@ export async function cutoffNotice(app: Weekmand): Promise<Notice | null> {
   const delivery = await app.delivery();
   const slot = delivery.next;
   if (!slot) return null;
+  const today = localDate(app.now());
+  const cutDay = localDate(Date.parse(slot.cutOff));
+  const when = cutDay === today ? 'vanavond' : `op ${dayName(cutDay)}`;
+  // Al afgerekend: geen nieuw menu en geen volle mand voorstellen, alleen melden wat nog ontbreekt.
+  const first = await app.plan();
+  if (first.placed) {
+    const head = `Je ${app.shop.label}-bestelling voor ${longDate(slot.windowStart)} is al geplaatst`;
+    const missing = first.lines.some(l => l.add || l.remove);
+    app.store.set('pendingQuestions', { questions: missing ? first.questions : [], asked: null });
+    if (!missing) {
+      return { text: `${head} (${euro(first.placed.totalCents)}, ${first.placed.count} producten). Alles voor het menu zit erin. Aanvullen kan nog tot ${when} ${clock(slot.cutOff)} in de Picnic-app.`, key: 'cutoff-' + slot.id };
+    }
+    // Het overzicht hieronder noemt het bedrag van de bestelling al.
+    const step = await nextStep(app);
+    return { text: `${head}. Aanvullen kan tot ${when} ${clock(slot.cutOff)}.\n\n${step.text}`, buttons: step.buttons, key: 'cutoff-' + slot.id };
+  }
   const menu = await app.menu();
   const empty = menu.days.filter(d => d.inOrder && !d.meal).length;
   const filled = empty ? await app.proposeMenu() : menu;
   const meals = filled.days.filter(d => d.inOrder && d.meal);
-  const plan = await app.plan();
+  const plan = empty ? await app.plan() : first;
   const regulars = app.regulars().filter(r => r.enabled).length;
-  const today = localDate(app.now());
-  const cutDay = localDate(Date.parse(slot.cutOff));
-  const when = cutDay === today ? 'vanavond' : `op ${dayName(cutDay)}`;
   const intro = [
     `Hoi! Je ${app.shop.label}-bestelling voor ${longDate(slot.windowStart)} wordt ${when} om ${clock(slot.cutOff)} definitief.`,
     `Ik heb ${regulars ? `${regulars} vaste producten en ` : ''}${meals.length} maaltijden klaargezet:`,

@@ -42,8 +42,13 @@ try {
             throw "Voer npm ci uit voordat je deze versie uitrolt ($($entry.Key))."
         }
     }
-    $files = @('package.json','package-lock.json','src','public','node_modules','deploy/activate.sh','deploy/weekmand.init')
+    # Welke versie dit is: de updatemelding in de webapp vergelijkt deze commit met main op GitHub.
+    $commit = (git -c safe.directory='*' rev-parse HEAD).Trim()
+    $dirty = [bool](git -c safe.directory='*' status --porcelain --untracked-files=no)
+    [ordered]@{ commit = $commit; dirty = $dirty; source = 'local'; at = (Get-Date -AsUTC -Format 'o') } | ConvertTo-Json -Compress | Set-Content -Encoding utf8NoBOM release.json
+    $files = @('package.json','package-lock.json','release.json','src','public','node_modules','deploy/activate.sh','deploy/weekmand.init','deploy/updater.mjs','deploy/weekmand-updater.init')
     tar.exe -czf $archive -- @files
+    Remove-Item -LiteralPath release.json
     if ($LASTEXITCODE -ne 0) { throw 'De release kon niet worden verpakt.' }
 
     $processInfo = [System.Diagnostics.ProcessStartInfo]::new('ssh.exe')

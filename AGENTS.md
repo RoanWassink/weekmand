@@ -9,3 +9,5 @@
 - Alleen "erasable" TypeScript (geen enums, namespaces of parameter properties): Node draait de bestanden zonder build.
 - Behoud de demowinkel als lokale testomgeving. Voer `npm test` uit bij elke wijziging.
 - UI- en ontwerpwerk (webapp in `public/`) gaat via de skill **Impeccable** (`.claude/skills/impeccable`, voor Codex `.agents/skills/impeccable`, versie 4.7.0). De webapp is een Operate-oppervlak: bekende patronen, op de telefoon hooguit vijf tabs. De launcher `scripts/impeccable` downloadt een programma; draai die alleen met akkoord van de gebruiker.
+- **Versies en changenotes.** Het versienummer staat alleen in `package.json`. Elke wijziging die naar `main` gaat, verhoogt het (x.y.Z voor een reparatie, x.Y.0 voor iets nieuws) en krijgt in `CHANGELOG.md` een kopje `## x.y.z — datum` met korte, functionele punten in gewone taal (wat merkt het huishouden), niet technisch. Het updatevenster in de webapp laat die punten zien.
+- **Uitrollen gaat via GitHub.** De gebruiker installeert updates zelf met de updateknop in de webapp (de root-updater haalt de top van `main`). Rol niet zelf uit naar de NanoPi, tenzij de gebruiker daar om vraagt.

@@ -23,6 +23,8 @@ export type IngredientDef = {
   category: Category;
   /** Basisvoorraad (zout, olie, kruiden): niet per recept kopen, alleen als de voorraad op is. */
   staple?: boolean;
+  /** Woorden die een ander product betekenen: zo'n product koppelt Weekmand nooit vanzelf ("punt" bij paprika). */
+  avoid?: string[];
   /** Zoekterm voor Picnic. */
   query: string;
   /** Varianten in de democatalogus. */

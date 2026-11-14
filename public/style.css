@@ -118,6 +118,41 @@ h4 { font-size: 1rem; line-height: 1.3; font-weight: 650; margin: 0; }
 .top .deadline { white-space: nowrap; }
 /* Smalle telefoon: deadline en chat gaan voor; de winkel staat ook in Mand en onder Meer. */
 @media (max-width: 419px) { .top .badge { display: none; } }
+/* Update rechtsboven: een rustige pil in de kopbalk (geen tomaat: het is geen haast). Raakvlak 44 px. */
+.top-update { flex: none; display: grid; place-items: center; min-width: var(--tap); height: var(--tap); padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--shell-ink); }
+.top-update .pill-inner { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 var(--s3) 0 10px; border-radius: 999px; background: var(--shell-2); font-size: .82rem; font-weight: 650; white-space: nowrap; }
+.top-update:hover .pill-inner { background: color-mix(in oklch, var(--shell-2) 80%, black); }
+.top-update svg { width: 18px; height: 18px; }
+.top-update:focus-visible { outline-color: var(--shell-ink); }
+.top-update.running svg { animation: update-bob 1.4s ease-in-out infinite; }
+@keyframes update-bob { 50% { transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) { .top-update.running svg { animation: none; } }
+/* Smalle telefoon (vanaf 360 px): alleen het pijltje, dichter op elkaar; het raakvlak blijft 44 px. */
+@media (max-width: 419px) {
+  .top { gap: var(--s1); }
+  .top h1 { margin-right: var(--s2); }
+  .top-update { position: relative; min-width: 32px; width: 32px; height: 32px; }
+  .top-update::after { content: ''; position: absolute; inset: -6px; }
+  .top-update .label { display: none; }
+  .top-update .pill-inner { padding: 0 7px; }
+}
+/* Updatevenster: changelog per wijziging, dunne lijnen ertussen. */
+.changelog { margin-top: var(--s5); border-top: 1px solid var(--line); }
+.changelog > summary { display: flex; align-items: center; min-height: var(--tap); color: var(--brand-text); }
+.changelog ol { margin: 0; padding: 0; list-style: none; }
+.changelog li { padding: var(--s3) 0; border-top: 1px solid var(--line); }
+.changelog li b { display: block; font-weight: 650; }
+.changelog .meta { font-size: .8rem; color: var(--ink-2); }
+.changelog li p { margin: var(--s1) 0 0; font-size: .875rem; color: var(--ink-2); }
+.changelog li p.sub { margin-top: var(--s3); color: var(--ink); font-weight: 600; }
+/* Changenotes per versie: gewone opsomming, versie als klein kopje. */
+.release-notes section { margin-top: var(--s4); }
+.release-notes h4 { margin: 0 0 var(--s2); font-size: .95rem; }
+.release-notes h4 .meta { font-weight: 400; color: var(--ink-2); font-size: .85rem; }
+.release-notes ul { margin: 0; padding-left: 1.2rem; }
+.release-notes li + li { margin-top: var(--s1); }
+.update-actions { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s4); }
+.update-progress { display: flex; align-items: center; gap: var(--s3); }
 /* Chat rechtsboven: overal één tik, met een puntje voor nieuwe meldingen. */
 .top-chat { position: relative; flex: none; display: grid; place-items: center; width: var(--tap); height: var(--tap); margin-right: calc(-1 * var(--s2)); padding: 0; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--shell-ink); }
 .top-chat:hover, .top-chat.active { background: var(--shell-2); }
@@ -381,6 +416,8 @@ ol.steps code, .hint code { font-size: .95em; padding: 1px 5px; border-radius: 4
 .card-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); padding: var(--s2) var(--s4) var(--s3); }
 .rated { display: inline-flex; align-items: center; gap: var(--s1); font-size: .82rem; font-weight: 650; }
 .rated .icon { width: 18px; height: 18px; }
+/* Recepten → Deze week: vandaag valt op. */
+.list-row.today .date-col { color: var(--brand-text); font-weight: 650; }
 .rated.up { color: var(--ok); }
 .rated.down { color: var(--warn); }
 .empty-state { padding: var(--s7) var(--s4); text-align: center; }
@@ -506,6 +543,11 @@ button.prod-row:hover { background: color-mix(in oklch, var(--surface-2) 70%, tr
 .thumb.none { background: var(--surface-2); }
 .product-row { display: flex; align-items: center; gap: var(--s3); width: 100%; min-height: 60px; padding: var(--s2) 0; border: 0; border-radius: 0; background: none; color: var(--ink); font-weight: 400; text-align: left; }
 .product-row + .product-row { border-top: 1px solid var(--line); }
+/* Mand per gerecht of per afdeling: kopjes zoals op de boodschappenlijst, en waarvoor een product is. */
+#cart-lines h4.cart-group { margin: var(--s4) 0 0; padding-bottom: var(--s1); font-size: .85rem; font-weight: 600; color: var(--ink-2); }
+#cart-lines h4.cart-group::first-letter { text-transform: uppercase; }
+#cart-lines .for-what { display: block; color: var(--brand-text); }
+#current-cart .segmented { margin-bottom: var(--s3); }
 .product-row:hover { background: none; }
 .product-row:hover .product-name { color: var(--brand-text); text-decoration: underline; text-underline-offset: .2em; }
 .product-row .grow, .product-option .grow { display: grid; gap: 2px; min-width: 0; }

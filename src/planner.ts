@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { normalize } from './catalog.ts';
 import { weekday } from './time.ts';
-import type { AvoidRule, BaseUnit, Household, IngredientDef, PantryItem, Recipe, ShopCart } from './types.ts';
+import type { AvoidRule, BaseUnit, CartLine, Household, IngredientDef, PantryItem, Recipe, ShopCart } from './types.ts';
 import { formatAmount, packAmount } from './units.ts';
 
 const day = 86_400_000;
@@ -146,7 +146,8 @@ export function proposeMenu(input: MenuInput): Record<string, string> {
     if (wd >= 1 && wd <= 4 && r.tags.includes('snel')) s += 0.4;
     if (household.children + household.toddlers > 0 && r.tags.includes('kindvriendelijk')) s += 0.6;
     s += input.bonus?.(r) ?? 0;
-    s += jitter(input.seed, date + r.id) * 0.9;
+    // Toeval weegt mee, zodat opnieuw voorstellen niet steeds dezelfde goedkope gerechten geeft.
+    s += jitter(input.seed, date + r.id) * 1.8;
     return s;
   };
 
@@ -196,8 +197,12 @@ export type Extra =
   | { id: string; kind: 'ingredient'; key: string; amount: number; label: string }
   | { id: string; kind: 'product'; productId: string; name: string; unitQuantity: string; cents: number; quantity: number; key?: string };
 export type Regular = { productId: string; name: string; unitQuantity: string; cents: number; quantity: number; enabled: boolean; weeks?: number; key?: string };
-/** declined: producten die de gebruiker voor deze bestelling heeft weggeveegd (niets bij, niets af). */
-export type OrderOptions = { extras: Extra[]; skip: string[]; declined?: string[] };
+/**
+ * declined: producten die de gebruiker voor deze bestelling heeft weggeveegd (niets bij, niets af).
+ * placed: de mand is afgerekend; overslaan en wegvegen gelden nog voor die geplaatste bestelling
+ * (id van de Picnic-bezorging, of '?' zolang Weekmand die nog niet heeft gezien).
+ */
+export type OrderOptions = { extras: Extra[]; skip: string[]; declined?: string[]; placed?: string };
 
 export type PlanMeal = { date: string; recipe: Recipe; servings: number };
 
@@ -206,6 +211,10 @@ export type PlanLine = {
   key?: string; name: string; unit?: BaseUnit; need?: number; stock?: number | null;
   /** Hoeveel van het ingrediënt al in de mand zit (alle passende producten), in de eenheid van het ingrediënt. */
   inCartAmount?: number;
+  /** Hoeveel van het ingrediënt al in de geplaatste bestelling zit, in de eenheid van het ingrediënt. */
+  orderedAmount?: number;
+  /** Verpakkingen van dit product in de geplaatste bestelling. */
+  ordered?: number;
   inCart: number; add: number; remove: number; reason: string; declined?: boolean;
 };
 export type Question = { key: string; name: string; amount: number; unit: BaseUnit; text: string };
@@ -229,6 +238,11 @@ export type PlanInput = {
   cart: ShopCart;
   /** Wat Weekmand zelf al in deze mand heeft gezet (productId → verpakkingen). */
   ledger: Record<string, number>;
+  /**
+   * De al geplaatste bestelling voor deze bezorging (bij Picnic is de mand na het afrekenen leeg).
+   * Telt als dekking, net als wat je zelf in de mand legde; Weekmand verandert er niets aan.
+   */
+  ordered?: CartLine[];
   ingredient: (key: string) => IngredientDef | undefined;
   /** Productopties per ingrediënt; leeg als er geen passend product is. */
   options: (key: string) => ProductOption[];
@@ -289,6 +303,10 @@ export function buildPlan(input: PlanInput): Plan {
   for (const l of input.cart.lines) cartQty.set(l.id, (cartQty.get(l.id) ?? 0) + l.quantity);
   const ledger = (id: string) => Math.min(input.ledger[id] ?? 0, cartQty.get(id) ?? 0);
   const manual = (id: string) => (cartQty.get(id) ?? 0) - ledger(id);
+  const orderedQty = new Map<string, number>();
+  const orderedInfo = new Map<string, CartLine>();
+  for (const l of input.ordered ?? []) { orderedQty.set(l.id, (orderedQty.get(l.id) ?? 0) + l.quantity); orderedInfo.set(l.id, l); }
+  const ordered = (id: string) => orderedQty.get(id) ?? 0;
   const managed = new Map<string, number>();
   const zeroed = new Set<string>();
   const info = new Map<string, Omit<ProductOption, 'packAmount'>>();
@@ -336,25 +354,30 @@ export function buildPlan(input: PlanInput): Plan {
       for (const l of input.cart.lines) if (input.productKey(l.id, l.name) === key) zeroed.add(l.id);
       continue;
     }
-    if (s.known && !s.fresh && s.amount > 0 && need.reason.some(r => !r.startsWith('Extra'))) {
-      questions.push({ key, name: def.name, amount: s.amount, unit: def.unit, text: `Heb je nog ${formatAmount(s.amount, def.unit)} ${def.name.toLowerCase()}?` });
-    }
     const shortfall = Math.max(0, need.amount - s.amount);
-    // Dekking door wat de gebruiker zelf al in de mand heeft gelegd.
-    const related = new Set([...options.map(o => o.id), ...input.cart.lines.filter(l => input.productKey(l.id, l.name) === key).map(l => l.id)]);
+    // Dekking door wat de gebruiker zelf al in de mand heeft gelegd, en door de al geplaatste bestelling.
+    const related = new Set([...options.map(o => o.id), ...[...input.cart.lines, ...input.ordered ?? []].filter(l => input.productKey(l.id, l.name) === key).map(l => l.id)]);
     let covered = 0;
     let inCartAmount = 0;
+    let orderedAmount = 0;
     for (const id of related) {
-      const line = cartInfo.get(id);
+      const line = cartInfo.get(id) ?? orderedInfo.get(id);
       const amount = options.find(o => o.id === id)?.packAmount ?? (line ? packAmount(line.unitQuantity, def) : null);
-      if (amount) { covered += manual(id) * amount; inCartAmount += (cartQty.get(id) ?? 0) * amount; }
+      if (amount) { covered += (manual(id) + ordered(id)) * amount; inCartAmount += (cartQty.get(id) ?? 0) * amount; orderedAmount += ordered(id) * amount; }
     }
-    const line: Partial<PlanLine> = { key, name: def.name, unit: def.unit, need: need.amount, stock: s.known ? s.amount : null, inCartAmount, reason: need.reason.join(' · ') };
+    // Alleen vragen als het antwoord uitmaakt: wat al in de mand of de bestelling zit, dekt de behoefte niet.
+    if (s.known && !s.fresh && s.amount > 0 && need.reason.some(r => !r.startsWith('Extra')) && covered < need.amount - 1e-9) {
+      questions.push({ key, name: def.name, amount: s.amount, unit: def.unit, text: `Heb je nog ${formatAmount(s.amount, def.unit)} ${def.name.toLowerCase()}?` });
+    }
+    const line: Partial<PlanLine> = { key, name: def.name, unit: def.unit, need: need.amount, stock: s.known ? s.amount : null, inCartAmount, ...(orderedAmount ? { orderedAmount } : {}), reason: need.reason.join(' · ') };
     if (!options.length) {
       if (shortfall - covered > 1e-9) missing.push({ key, name: def.name, reason: 'Geen passend product gevonden; koppel er een in Instellingen → Producten.' });
       continue;
     }
-    const rest = Math.max(0, shortfall - covered);
+    let rest = Math.max(0, shortfall - covered);
+    // Bijna gedekt door wat al in de mand of de bestelling zit: receptmaten zijn ruw, dus geen extra
+    // verpakking voor een paar procent (29 g gehakt op 529 g) of een kwart stuk.
+    if (covered > 0 && rest <= Math.max(need.amount * 0.1, def.unit === 'st' ? 0.25 : 0) + 1e-9) rest = 0;
     if (rest <= 1e-9) {
       // Al gedekt; eerdere toevoegingen van Weekmand mogen weg.
       for (const id of related) if (ledger(id) > 0) { info.set(id, cartOrOption(id)); reasons.set(id, line); managed.set(id, managed.get(id) ?? 0); }
@@ -371,7 +394,7 @@ export function buildPlan(input: PlanInput): Plan {
   }
 
   function cartOrOption(id: string) {
-    const c = cartInfo.get(id);
+    const c = cartInfo.get(id) ?? orderedInfo.get(id);
     return c ? { id, name: c.name, unitQuantity: c.unitQuantity, cents: c.cents } : { id, name: id, unitQuantity: '', cents: 0 };
   }
 
@@ -384,7 +407,7 @@ export function buildPlan(input: PlanInput): Plan {
   for (const p of productLines) {
     if (zeroed.has(p.id)) continue;
     // Een vaste boodschap vult aan tot het gewone aantal; een extra komt er bovenop.
-    const extra = p.topUp ? Math.max(0, p.quantity - manual(p.id) - (managed.get(p.id) ?? 0)) : p.quantity;
+    const extra = p.topUp ? Math.max(0, p.quantity - manual(p.id) - ordered(p.id) - (managed.get(p.id) ?? 0)) : p.quantity;
     managed.set(p.id, (managed.get(p.id) ?? 0) + extra);
     info.set(p.id, { id: p.id, name: p.name, unitQuantity: p.unitQuantity, cents: p.cents });
     if (!reasons.has(p.id)) reasons.set(p.id, { name: p.name, reason: p.reason });
@@ -414,7 +437,8 @@ export function buildPlan(input: PlanInput): Plan {
       productId: id, product: p.name, unitQuantity: p.unitQuantity, name: r.name ?? p.name,
       // Stuksprijs bij dit aantal (staffelkorting meegerekend).
       cents: want > 0 && (p as ProductOption).tiers?.length ? Math.round(packCost(p as ProductOption, want) / want) : p.cents,
-      ...(r.key ? { key: r.key, unit: r.unit, need: r.need, stock: r.stock, inCartAmount: r.inCartAmount } : {}),
+      ...(r.key ? { key: r.key, unit: r.unit, need: r.need, stock: r.stock, inCartAmount: r.inCartAmount, ...(r.orderedAmount ? { orderedAmount: r.orderedAmount } : {}) } : {}),
+      ...(ordered(id) ? { ordered: ordered(id) } : {}),
       inCart: current, add: Math.max(0, want - current), remove: Math.max(0, current - want),
       reason: zeroed.has(id) ? 'Overgeslagen deze week' : r.reason ?? '', ...(declined.has(id) ? { declined: true } : {}),
     });

@@ -30,6 +30,8 @@ export class Scheduler {
   #app: Weekmand;
   #timer: NodeJS.Timeout | null = null;
   #busy = false;
+  /** Na een herstart al eerder bijwerken (na 4 uur in plaats van 12). */
+  #importedOnce = false;
   warnHours: number;
 
   constructor(app: Weekmand, warnHours = Number(process.env.CUTOFF_WARNING_HOURS || 4)) {
@@ -59,8 +61,11 @@ export class Scheduler {
       }
       if (app.shopMode === 'picnic' && app.picnic.ready()) {
         const last = app.store.get<number>('lastImport', 0);
-        // Twee keer per dag: nieuwe bezorgingen (voorraad) en Picnic-recepten.
-        if (app.now() - last > 12 * 36e5) {
+        // Twee keer per dag: nieuwe bezorgingen (voorraad) en Picnic-recepten. Is een bestelde
+        // bezorging net geweest, dan meteen (en elk half uur opnieuw tot Picnic hem als bezorgd toont).
+        const since = app.now() - last;
+        if (since > (this.#importedOnce ? 12 : 4) * 36e5 || (app.deliveryImportDue() && since > 30 * 60_000)) {
+          this.#importedOnce = true;
           app.store.set('lastImport', app.now());
           await app.importHistory().catch(error => console.error('Picnic-import:', error.message));
           await app.importPicnicRecipes().catch(error => console.error('Picnic-recepten:', error.message));

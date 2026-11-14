@@ -121,3 +121,36 @@ test('weggeveegde regel: niets erbij en niets eraf; toont wat al in de mand zit'
   assert.ok(declined.lines.find(l => l.productId === line.productId)!.declined);
   assert.ok(declined.lines.every(l => !l.add && !l.remove));
 });
+
+test('geplaatste bestelling telt als dekking: na het afrekenen is de lege mand geen reden om alles opnieuw te kopen', () => {
+  const ordered = cart({ ei10: 1, melk1: 2 }).lines;
+  const regulars = [{ productId: 'melk1', name: 'Melk 1 l', unitQuantity: '1 liter', cents: 129, quantity: 2, enabled: true }];
+  const stale = [{ key: 'ei', amount: 4, checkedAt: '2026-11-01T08:00:00Z', minimum: 0 }];
+  const before = plan({ regulars, pantry: stale });
+  assert.ok(before.lines.some(l => l.add > 0), 'zonder bestelling: eieren en melk erbij');
+  assert.equal(before.questions.length, 1, 'oude meting: navragen');
+  const after = plan({ regulars, pantry: stale, ordered });
+  assert.ok(after.lines.every(l => !l.add && !l.remove), 'alles zit in de bestelling');
+  assert.deepEqual(after.target, after.before, 'de mand blijft zoals hij is');
+  assert.equal(after.questions.length, 0, 'niet vragen wat de bestelling al dekt');
+  assert.equal(after.addCents, 0);
+  // Meer nodig dan besteld: alleen het verschil, en de bestelling staat bij de regel.
+  const more = plan({ ordered: cart({ ei6: 1 }).lines });
+  const line = more.lines.find(l => l.key === 'ei' && l.add)!;
+  assert.equal(line.orderedAmount, 6);
+  assert.deepEqual(more.target, { ei6: 1 }, '9 nodig, 6 besteld: nog één doos van 6');
+});
+
+test('bijna genoeg in mand of bestelling: geen extra verpakking voor een paar procent', () => {
+  const meals = [{ date: '2026-11-14', recipe: { ...recipe('saus', 0), ingredients: [{ key: 'melk', amount: 225, unit: 'ml' as const }] }, servings: 2.35 }];
+  // 528,75 ml nodig, 500 ml besteld (een ander pak dan Weekmand zou kiezen): 29 ml tekort is afronding.
+  const ordered = [{ id: 'melk500', name: 'Melk 500 ml', unitQuantity: '500 ml', cents: 79, available: true, quantity: 1 }];
+  const productKey = (id: string) => id === 'melk500' ? 'melk' : Object.entries(options).find(([, o]) => o.some(x => x.id === id))?.[0];
+  const p = plan({ meals, ordered, productKey });
+  assert.deepEqual(p.target, {});
+  assert.ok(p.lines.every(l => !l.add));
+  // Zonder iets in mand of bestelling wordt het wel gewoon gekocht.
+  assert.deepEqual(plan({ meals }).target, { melk1: 1 });
+  // Een echt tekort (eieren: 9 nodig, 6 in de mand) blijft een tekort.
+  assert.deepEqual(plan({ cart: cart({ ei6: 1 }) }).target, { ei6: 2 });
+});
