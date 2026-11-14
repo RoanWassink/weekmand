@@ -290,6 +290,8 @@ function renderHeader() {
     $('deadline').classList.toggle('urgent', d.hoursLeft < 6);
   }
   $('version').textContent = 'Weekmand ' + S.version;
+  // Alleen in een uitgerolde Weekmand (op de router) kan die zelf naar updates kijken.
+  $('update-check').hidden = !S.update;
   renderUnread();
   renderUpdateButton();
 }
@@ -307,6 +309,8 @@ function renderUpdateButton() {
   $('update-button').setAttribute('aria-label', u.running ? 'Weekmand wordt bijgewerkt' : `Update beschikbaar: ${u.count} ${u.count === 1 ? 'wijziging' : 'wijzigingen'}`);
 }
 $('update-button').onclick = () => openUpdate().catch(e => toast(e.message, true));
+// Meer → Zoek naar updates: meteen op GitHub kijken in plaats van op de volgende keer wachten.
+$('update-check').onclick = () => openUpdate().catch(e => toast(e.message, true));
 
 const longDay = new Intl.DateTimeFormat('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' });
 const changeDate = iso => iso ? longDay.format(new Date(iso)) : '';
@@ -331,8 +335,14 @@ function changelogList(changes, title = 'Wat is er nieuw') {
 async function openUpdate(force = true) {
   dialog('Update', el('p', { class: 'muted' }, 'Kijken op GitHub…'));
   const info = await api('update/info', { force });
+  if (!info.enabled) { dialog('Update', el('p', {}, 'Zoeken naar updates werkt alleen in de Weekmand op de router.')); return; }
   if (info.status?.state === 'running') return showUpdateProgress(info.status.commit, info.status.at);
   const c = info.check;
+  // De pil rechtsboven meteen bijwerken met wat GitHub nu zegt.
+  if (c) {
+    S.update = { ...(S.update ?? {}), available: !!c.available, count: c.count ?? 0, ...(c.version ? { version: c.version } : {}) };
+    renderUpdateButton();
+  }
   const you = info.installed ? `Je gebruikt versie ${info.installed.version}${info.installed.at ? ` van ${changeDate(info.installed.at)}` : ''}.` : '';
   const local = info.installed?.dirty ? el('p', { class: 'small muted' }, 'Deze versie is vanaf de pc uitgerold, met wijzigingen die (nog) niet op GitHub staan. Updaten vervangt die door de versie van GitHub.') : null;
   const failed = info.status?.state === 'failed' ? el('p', { class: 'warn small' }, 'Vorige poging: ' + info.status.message) : null;
@@ -343,8 +353,10 @@ async function openUpdate(force = true) {
       el('div', { class: 'update-actions' }, btn('Opnieuw kijken', () => openUpdate().catch(e => toast(e.message, true)), 'ghost')));
     return;
   }
-  dialog(c.version ? `Versie ${c.version} staat klaar` : 'Update beschikbaar',
-    c.version ? el('p', {}, el('b', {}, `Van ${info.installed.version} naar ${c.version}`))
+  // Zelfde versienummer maar nieuwere commits (versie vergeten op te hogen): dan het aantal wijzigingen.
+  const newVersion = c.version && c.version !== info.installed?.version ? c.version : null;
+  dialog(newVersion ? `Versie ${newVersion} staat klaar` : 'Update beschikbaar',
+    newVersion ? el('p', {}, el('b', {}, `Van ${info.installed.version} naar ${newVersion}`))
       : el('p', {}, el('b', {}, `${c.count} ${c.count === 1 ? 'wijziging' : 'wijzigingen'} op GitHub`), ` · ${info.repo}`),
     c.notes?.length ? releaseNotes(c.notes) : null,
     el('p', { class: 'muted small' }, you + ' Updaten duurt een paar minuten: Weekmand maakt eerst een back-up en gaat terug naar deze versie als de nieuwe niet goed start.'),
