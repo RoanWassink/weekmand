@@ -709,6 +709,42 @@ export class Weekmand {
     return results;
   }
 
+  /**
+   * Een gerecht zelf aanpassen: naam, bereidingstijd, ingrediënten en bereiding. Het origineel blijft
+   * staan; de maaltijd krijgt een eigen versie, en die staat later ook zo onder Gegeten. Een eigen
+   * versie die alleen bij deze maaltijd hoort, wordt bijgewerkt in plaats van nog eens gekopieerd.
+   * Hoeveelheden komen binnen voor het aantal porties van de maaltijd.
+   */
+  editMeal(input: { date?: unknown; name?: unknown; minutes?: unknown; steps?: unknown; ingredients?: unknown }) {
+    const date = String(input.date ?? '');
+    const meal = this.store.meal(date);
+    check(meal, 'Op die dag staat geen gerecht.');
+    const old = this.catalog.recipe(meal.recipeId);
+    const name = String(input.name ?? '').trim();
+    const servings = meal.servings > 0 ? meal.servings : portions(this.household);
+    const rows = Array.isArray(input.ingredients) ? input.ingredients : [];
+    const ingredients = rows.flatMap((i: any) => {
+      const amount = Number(i?.amount);
+      const label = String(i?.name ?? '').trim().slice(0, 60);
+      return label && amount > 0 ? [{ name: label, amount: amount / servings, unit: String(i?.unit ?? 'st') }] : [];
+    });
+    check(ingredients.length, 'Geef minstens één ingrediënt met een hoeveelheid.');
+    const own = old?.source === 'user' && old.tags.includes('aangepast') && this.store.mealDatesWithRecipe(old.id).every(d => d === date);
+    const base = (slug(name) || 'recept').slice(0, 44) + '-aangepast';
+    let id = own ? old!.id : base;
+    for (let n = 2; !own && this.catalog.recipe(id); n++) id = `${base}-${n}`;
+    const recipe = this.catalog.addRecipe({
+      id, name, minutes: Number(input.minutes) || old?.minutes || 30, steps: String(input.steps ?? old?.steps ?? ''),
+      // Vegetarisch rekent het recept zelf opnieuw uit; een favoriet is het origineel, niet deze versie.
+      tags: [...(old?.tags ?? []).filter(t => !['favoriet', 'vegetarisch', 'aangepast'].includes(t)), 'aangepast'],
+      ingredients,
+    }, 'user');
+    // Geen afwijzing: aanpassen is geen "liever iets anders" (dat telt mee voor het leren).
+    this.store.saveMeal({ ...meal, recipeId: recipe.id, status: 'approved' });
+    this.changed();
+    return { date, day: dayName(date), recipe: this.#recipeView(recipe), copied: !own };
+  }
+
   removeMeal(date: string) {
     const meal = this.store.meal(date);
     check(meal, 'Op die dag staat geen maaltijd.');

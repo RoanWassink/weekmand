@@ -2,6 +2,11 @@
 
 Per versie in gewone taal wat er voor jullie verandert. Nieuwste bovenaan. Het updatevenster in Weekmand laat deze punten zien.
 
+## 2.2.0 — 14 november 2026
+
+- Een gerecht zelf bewerken: vink het aan in het Menu en kies Zelf bewerken (naam, ingrediënten, bereiding). Ook bij Recepten → Deze week (Aanpassen).
+- Jouw aangepaste versie geldt alleen voor die dag en staat later zo onder Gegeten; het oorspronkelijke recept blijft gewoon staan.
+
 ## 2.1.0 — 14 november 2026
 
 - De recepten van deze week staan nu onder Recepten → Deze week; het Menu toont alleen wat je nog plant.

@@ -195,6 +195,7 @@ const ui: Record<string, Handler> = {
   'meal/set': async i => app.setMeal({ date: String(i.date), recipeId: String(i.recipeId), servings: i.servings }),
   'meal/swap': async i => app.swapMeal(String(i.date), String(i.wish ?? '')),
   'meal/replace': async i => ({ replaced: await app.replaceMeals({ dates: i.dates, note: i.note }) }),
+  'meal/edit': i => app.editMeal(i),
   'meal/remove': i => { app.removeMeal(String(i.date)); return {}; },
   'menu/propose': async i => app.proposeMenu({ wish: String(i.wish ?? ''), replace: !!i.replace }),
   'menu/approve': async () => ({ approved: await app.approveMenu() }),

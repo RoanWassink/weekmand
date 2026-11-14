@@ -461,6 +461,61 @@ function renderPickBar() {
     ? 'Met een opmerking past de AI het recept daarop aan. Leeg: Weekmand kiest een ander gerecht.'
     : 'Weekmand kiest een ander gerecht; je opmerking geldt als wens.';
   $('pick-replace').textContent = n === 1 ? 'Vervangen' : `Vervang ${n} gerechten`;
+  // Eén gerecht: ook zelf de ingrediënten en bereiding aanpassen.
+  $('pick-edit').hidden = n !== 1;
+}
+$('pick-edit').onclick = () => {
+  const [date] = picked;
+  editMealDialog(date, () => { picked.clear(); $('pick-note').value = ''; }).catch(e => toast(e.message, true));
+};
+
+/**
+ * Een gerecht zelf aanpassen. Hoeveelheden voor het aantal porties van die dag; Weekmand bewaart het
+ * als eigen versie (het origineel blijft staan), en zo staat het later ook onder Gegeten.
+ */
+async function editMealDialog(date, onSaved) {
+  const day = S.menu.days.find(d => d.date === date && d.meal) ?? S.menu.thisWeek?.find(d => d.date === date);
+  if (!day?.meal) return;
+  const m = day.meal;
+  const r = await api('recipe', { id: m.id, servings: m.servings });
+  const units = ['g', 'kg', 'ml', 'l', 'st', 'el', 'tl'];
+  const shown = (amount, unit) => unit === 'st' || amount < 10 ? Math.round(amount * 10) / 10 : Math.round(amount);
+  const name = el('input', { value: r.name, maxlength: 80, required: true, autocomplete: 'off' });
+  const minutes = el('input', { type: 'number', min: 5, max: 240, step: 5, inputmode: 'numeric', value: r.minutes });
+  const steps = el('textarea', { rows: 6, maxlength: 1500 });
+  steps.value = r.steps ?? '';
+  const rows = el('div', { class: 'edit-ingredients' });
+  const addRow = (i = { name: '', amount: '', unit: 'g' }) => {
+    const row = el('div', { class: 'edit-row' },
+      el('input', { class: 'ing-name', value: i.name, list: 'ingredient-list', placeholder: 'Ingrediënt', 'aria-label': 'Ingrediënt', autocomplete: 'off' }),
+      el('input', { class: 'ing-amount', type: 'number', min: 0, step: 'any', inputmode: 'decimal', value: i.amount === '' ? '' : shown(i.amount, i.unit), 'aria-label': 'Hoeveelheid' }),
+      el('select', { class: 'ing-unit', 'aria-label': 'Eenheid' }, ...units.map(u => el('option', { value: u, selected: u === i.unit || undefined }, u))),
+      iconBtn('x', 'Ingrediënt weghalen', () => row.remove(), 'danger'));
+    rows.append(row);
+    return row;
+  };
+  for (const i of r.ingredients) addRow({ name: i.name, amount: i.amount, unit: i.unit });
+  const save = () => run(async () => {
+    const ingredients = [...rows.querySelectorAll('.edit-row')].map(row => ({
+      name: row.querySelector('.ing-name').value.trim(), amount: Number(row.querySelector('.ing-amount').value), unit: row.querySelector('.ing-unit').value,
+    })).filter(i => i.name && i.amount > 0);
+    if (!ingredients.length) throw new Error('Geef minstens één ingrediënt met een hoeveelheid.');
+    const res = await api('meal/edit', { date, name: name.value.trim(), minutes: Number(minutes.value) || r.minutes, steps: steps.value, ingredients });
+    closeDialog();
+    onSaved?.();
+    planStale = true;
+    toast(`${res.recipe.name} opgeslagen als jouw versie voor ${res.day}.`);
+  });
+  dialog('Gerecht bewerken', el('form', { class: 'stack recipe-edit', onsubmit: e => { e.preventDefault(); save(); } },
+    el('p', { class: 'hint' }, `Alleen voor ${day.day} ${shortDate(date)}. Weekmand bewaart dit als jouw versie; het oorspronkelijke recept blijft staan.`),
+    el('label', {}, 'Naam', name),
+    el('label', {}, 'Bereidingstijd in minuten', minutes),
+    el('div', { class: 'stack' },
+      el('p', { class: 'label' }, `Ingrediënten voor ${num.format(m.servings)} ${m.servings === 1 ? 'persoon' : 'personen'}`),
+      rows,
+      btn('Ingrediënt toevoegen', () => addRow().querySelector('.ing-name').focus(), 'ghost small')),
+    el('label', {}, 'Bereiding', steps),
+    el('div', { class: 'row' }, el('button', { class: 'primary' }, 'Opslaan'), btn('Annuleren', closeDialog, 'ghost'))));
 }
 $('pick-bar').onsubmit = e => {
   e.preventDefault();
@@ -1400,7 +1455,8 @@ function renderThisWeek(panel) {
         el('span', { class: 'date-col' }, d.today ? 'Vandaag' : fmtShort(d.date)),
         el('span', { class: 'row-text' },
           el('button', { type: 'button', class: 'link', onclick: () => showRecipe(d.meal.id, d.meal.servings) }, d.meal.name),
-          el('span', { class: 'row-detail' }, [`${d.meal.minutes} min`, `${num.format(d.meal.servings)} p.`, d.meal.note].filter(Boolean).join(' · '))))))));
+          el('span', { class: 'row-detail' }, [`${d.meal.minutes} min`, `${num.format(d.meal.servings)} p.`, d.meal.note].filter(Boolean).join(' · '))),
+        btn('Aanpassen', () => editMealDialog(d.date).catch(e => toast(e.message, true)), 'small ghost'))))));
 }
 
 async function renderEaten(panel) {
