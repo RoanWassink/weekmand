@@ -2,6 +2,11 @@
 
 Per versie in gewone taal wat er voor jullie verandert. Nieuwste bovenaan. Het updatevenster in Weekmand laat deze punten zien.
 
+## 2.3.0 — 14 november 2026
+
+- Onder Meer staat naast het versienummer de knop Zoek naar updates: Weekmand kijkt meteen op GitHub.
+- Vanzelf kijkt Weekmand nu elk uur naar een nieuwe versie (was zes uur).
+
 ## 2.2.0 — 14 november 2026
 
 - Een gerecht zelf bewerken: vink het aan in het Menu en kies Zelf bewerken (naam, ingrediënten, bereiding). Ook bij Recepten → Deze week (Aanpassen).

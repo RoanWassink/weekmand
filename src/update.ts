@@ -14,8 +14,8 @@ import { check } from './errors.ts';
  */
 
 /** Zo vaak kijkt Weekmand vanzelf naar GitHub (zonder token mag dat 60 keer per uur). */
-const CHECK_INTERVAL = 6 * 36e5;
-/** "Opnieuw kijken" in de webapp: hooguit eens per minuut echt naar GitHub. */
+const CHECK_INTERVAL = 36e5;
+/** "Zoek naar updates" en "Opnieuw kijken" in de webapp: hooguit eens per minuut echt naar GitHub. */
 const FORCE_INTERVAL = 60_000;
 
 /** De versie die draait. Een uitrol legt release.json naast src/; zonder dat bestand (ontwikkelen) geen updates. */
