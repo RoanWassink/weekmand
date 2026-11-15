@@ -722,13 +722,7 @@ export class Weekmand {
     const old = this.catalog.recipe(meal.recipeId);
     const name = String(input.name ?? '').trim();
     const servings = meal.servings > 0 ? meal.servings : portions(this.household);
-    const rows = Array.isArray(input.ingredients) ? input.ingredients : [];
-    const ingredients = rows.flatMap((i: any) => {
-      const amount = Number(i?.amount);
-      const label = String(i?.name ?? '').trim().slice(0, 60);
-      return label && amount > 0 ? [{ name: label, amount: amount / servings, unit: String(i?.unit ?? 'st') }] : [];
-    });
-    check(ingredients.length, 'Geef minstens één ingrediënt met een hoeveelheid.');
+    const ingredients = perPerson(input.ingredients, servings);
     const own = old?.source === 'user' && old.tags.includes('aangepast') && this.store.mealDatesWithRecipe(old.id).every(d => d === date);
     const base = (slug(name) || 'recept').slice(0, 44) + '-aangepast';
     let id = own ? old!.id : base;
@@ -741,8 +735,35 @@ export class Weekmand {
     }, 'user');
     // Geen afwijzing: aanpassen is geen "liever iets anders" (dat telt mee voor het leren).
     this.store.saveMeal({ ...meal, recipeId: recipe.id, status: 'approved' });
+    // Een gerecht dat al gegeten is, gaat niet nog eens van de voorraad af.
+    if (meal.consumed) this.store.markConsumed(date);
     this.changed();
     return { date, day: dayName(date), recipe: this.#recipeView(recipe), copied: !own };
+  }
+
+  /**
+   * Een recept zelf aanpassen, voor overal (vanuit Recepten). Een ingebouwd recept krijgt een eigen
+   * versie met dezelfde id, die het vervangt; restoreRecipe zet het origineel terug. Hoeveelheden
+   * komen binnen voor `servings` personen.
+   */
+  editRecipe(input: { id?: unknown; servings?: unknown; name?: unknown; minutes?: unknown; steps?: unknown; ingredients?: unknown }) {
+    const old = this.catalog.recipe(String(input.id ?? ''));
+    check(old, 'Onbekend recept.');
+    const servings = Number(input.servings) > 0 ? Number(input.servings) : 1;
+    const recipe = this.catalog.addRecipe({
+      id: old.id, name: String(input.name ?? '').trim(), minutes: Number(input.minutes) || old.minutes, steps: String(input.steps ?? old.steps ?? ''),
+      tags: old.tags.filter(t => !['favoriet', 'vegetarisch'].includes(t)), ingredients: perPerson(input.ingredients, servings),
+    }, old.source === 'builtin' ? 'user' : old.source);
+    this.changed();
+    return { recipe: this.#recipeView(recipe), overridesBuiltin: this.catalog.isBuiltin(recipe.id) };
+  }
+
+  /** Het oorspronkelijke ingebouwde recept terugzetten (de eigen versie gaat weg). */
+  restoreRecipe(id: string) {
+    check(this.catalog.isBuiltin(id) && this.catalog.recipe(id)?.source !== 'builtin', 'Er is geen eigen versie om terug te zetten.');
+    this.catalog.deleteRecipe(id);
+    this.changed();
+    return { recipe: this.#recipeView(this.catalog.recipe(id)!) };
   }
 
   removeMeal(date: string) {
@@ -773,6 +794,7 @@ export class Weekmand {
     const n = servings ?? portions(this.household);
     return {
       ...this.#recipeView(r), steps: r.steps, servings: n, costPerPortionCents: this.recipeCost(r),
+      overridesBuiltin: r.source !== 'builtin' && this.catalog.isBuiltin(r.id),
       ingredients: r.ingredients.map(i => {
         const def = this.catalog.ingredient(i.key);
         return { key: i.key, name: def?.name ?? i.key, amount: i.amount * n, unit: i.unit, text: formatAmount(i.amount * n, i.unit) + ' ' + (def?.name.toLowerCase() ?? i.key) };
@@ -2681,4 +2703,15 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   let timer: NodeJS.Timeout | undefined;
   return Promise.race([promise, new Promise<null>(resolve => { timer = setTimeout(resolve, ms, null); timer.unref?.(); })]).finally(() => clearTimeout(timer));
+}
+
+/** Ingrediëntregels uit de webapp (voor `servings` personen) naar hoeveelheden per persoon. */
+function perPerson(rows: unknown, servings: number) {
+  const list = (Array.isArray(rows) ? rows : []).flatMap((i: any) => {
+    const amount = Number(i?.amount);
+    const name = String(i?.name ?? '').trim().slice(0, 60);
+    return name && amount > 0 ? [{ name, amount: amount / servings, unit: String(i?.unit ?? 'st') }] : [];
+  });
+  check(list.length, 'Geef minstens één ingrediënt met een hoeveelheid.');
+  return list;
 }
