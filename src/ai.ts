@@ -49,11 +49,33 @@ function report(provider: Provider, model: string, input: number, output: number
 }
 export const labelOf = (c: AIConfig) => providers[c.provider].label;
 
-function apiProblem(status: number | undefined, label: string): Problem {
+/**
+ * Een fout van de aanbieder als melding voor het huishouden. `detail` is de foutmelding van de
+ * aanbieder zelf: die gaat naar het logboek van de router (zonder sleutel), en bepaalt of het echt
+ * aan het model-ID ligt.
+ */
+function apiProblem(status: number | undefined, label: string, detail = '', key = ''): Problem {
+  const said = detail.replace(/\s+/g, ' ').trim();
+  if (said || status) console.error(`${label} HTTP ${status ?? '?'}: ${redact(said, key).slice(0, 400)}`);
   if (status === 401 || status === 403) return new Problem(422, `${label} weigert toegang. Controleer de API-sleutel.`);
   if (status === 402 || status === 429) return new Problem(422, `${label} accepteert nu geen aanvragen. Controleer tegoed en limieten.`);
-  if (status === 400 || status === 404) return new Problem(422, `${label} weigert de aanvraag. Controleer het model-ID.`);
+  if (status === 404 || (status === 400 && /invalid[_ ]model|unknown model|model\W[^"]{0,40}(not found|does not exist)/i.test(said))) return new Problem(422, `${label} kent dit model niet. Controleer het model-ID.`);
+  if (status === 400) return new Problem(422, `${label} weigert de aanvraag. Probeer het nog eens; helpt dat niet, begin dan een nieuw gesprek (in Telegram met /nieuw).`);
   return new Problem(502, `${label} gaf geen bruikbaar antwoord. Probeer het opnieuw.`);
+}
+/** Geen sleutel in het logboek, ook niet als een aanbieder hem (deels) terugzegt. */
+const redact = (text: string, key: string) => (key ? text.split(key).join('…') : text).replace(/\b(sk|key)-[A-Za-z0-9*_-]{6,}/g, '$1-…');
+
+/** Wat er bij een antwoord zonder tekst teruggaat; een leeg antwoord zou later het hele gesprek blokkeren. */
+const NO_ANSWER = 'Ik ben er nog niet uit. Kun je het anders formuleren?';
+
+/**
+ * Eerdere beurten voor de aanbieder. Een lege beurt (zoals een antwoord dat alleen uit denkstappen
+ * bestond) weigeren Mistral en Claude, en dan zou elk volgend bericht in dat gesprek mislukken.
+ */
+export function cleanHistory(history: Turn[]): Turn[] {
+  return history.filter(t => t.role === 'assistant' || t.content.trim())
+    .map(t => t.content.trim() ? t : { role: t.role, content: '(geen antwoord)' });
 }
 
 /**
@@ -81,7 +103,7 @@ async function claude(config: AIConfig, input: ConverseInput): Promise<string> {
   // Server-side fallback bij een weigering, voor de modellen die dat ondersteunen.
   const fallback = /^claude-(opus-5-5|opus-5|fable-5-1|sonnet-5-5)$/.test(model);
   const messages: any[] = [
-    ...input.history.map(t => ({ role: t.role, content: t.content })),
+    ...cleanHistory(input.history).map(t => ({ role: t.role, content: t.content })),
     { role: 'user', content: [
       { type: 'text', text: input.context },
       ...(input.images ?? []).map(i => ({ type: 'image', source: { type: 'base64', media_type: i.mediaType, data: i.data } })),
@@ -100,7 +122,7 @@ async function claude(config: AIConfig, input: ConverseInput): Promise<string> {
         ...(fallback ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' } : {}),
       } as any);
     } catch (error) {
-      if (error instanceof Anthropic.APIError) throw apiProblem(error.status, 'Claude');
+      if (error instanceof Anthropic.APIError) throw apiProblem(error.status, 'Claude', error.message, config.key);
       throw new Problem(502, 'Claude is niet bereikbaar.');
     }
     const u = response.usage ?? {};
@@ -112,7 +134,7 @@ async function claude(config: AIConfig, input: ConverseInput): Promise<string> {
     messages.push({ role: 'assistant', content: response.content });
     if (response.stop_reason === 'pause_turn') continue;
     const calls = response.content.filter((b: any) => b.type === 'tool_use');
-    if (response.stop_reason !== 'tool_use' || !calls.length) return text;
+    if (response.stop_reason !== 'tool_use' || !calls.length) return text || NO_ANSWER;
     const results = [];
     for (const call of calls) {
       const result = await input.run({ id: call.id, name: call.name, input: call.input });
@@ -120,7 +142,7 @@ async function claude(config: AIConfig, input: ConverseInput): Promise<string> {
     }
     messages.push({ role: 'user', content: results });
   }
-  return text || 'Ik ben er nog niet uit. Kun je het anders formuleren?';
+  return text || NO_ANSWER;
 }
 
 // ───────────── OpenAI-compatibele aanbieders ─────────────
@@ -132,7 +154,7 @@ async function openaiCompatible(config: AIConfig, input: ConverseInput): Promise
     : providers[config.provider].url;
   const messages: any[] = [
     { role: 'system', content: input.system + '\n\n' + input.context },
-    ...input.history.map(t => ({ role: t.role, content: t.content })),
+    ...cleanHistory(input.history).map(t => ({ role: t.role, content: t.content })),
     { role: 'user', content: input.images?.length ? [
       { type: 'text', text: input.message },
       // Mistral wil de afbeelding als tekenreeks, OpenAI als object.
@@ -143,6 +165,8 @@ async function openaiCompatible(config: AIConfig, input: ConverseInput): Promise
   let text = '';
   // Minder nadenken vragen; kent het model dat niet (fout 400), dan één keer zonder.
   let effort = config.provider === 'mistral' && input.effort ? input.effort : undefined;
+  // Een model dat nadenkt, kan al zijn ruimte daaraan kwijt zijn; dan nog eens met meer ruimte.
+  let maxTokens = input.maxTokens ?? 1500;
   for (let step = 0; step < (input.maxSteps ?? 8); step++) {
     let response: Response;
     try {
@@ -150,7 +174,7 @@ async function openaiCompatible(config: AIConfig, input: ConverseInput): Promise
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(config.provider === 'local' ? 180_000 : input.images?.length ? 120_000 : 60_000),
         headers: { 'Content-Type': 'application/json', ...(config.key ? { Authorization: 'Bearer ' + config.key } : {}) },
         body: JSON.stringify({
-          model: input.model || modelOf(config), messages, max_tokens: input.maxTokens ?? 1500, ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
+          model: input.model || modelOf(config), messages, max_tokens: maxTokens, ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
           ...(config.provider === 'deepseek' ? { thinking: { type: 'disabled' } } : {}),
           ...(effort ? { reasoning_effort: effort } : {}),
         }),
@@ -159,15 +183,22 @@ async function openaiCompatible(config: AIConfig, input: ConverseInput): Promise
       throw new Problem(502, (error as Error)?.name === 'TimeoutError' ? `${label} reageerde te laat.` : `${label} is niet bereikbaar.`);
     }
     if (response.status === 400 && effort) { effort = undefined; step--; continue; }
-    if (!response.ok) throw apiProblem(response.status, label);
+    if (!response.ok) throw apiProblem(response.status, label, await response.text().catch(() => ''), config.key);
     const data = await response.json().catch(() => null);
     const u = data?.usage ?? {};
     report(config.provider, String(data?.model || input.model || modelOf(config)), count(u.prompt_tokens), count(u.completion_tokens),
       count(u.prompt_cache_hit_tokens ?? u.prompt_tokens_details?.cached_tokens));
     const message = data?.choices?.[0]?.message;
     if (!message) throw new Problem(502, `${label} gaf een leeg antwoord.`);
-    text = contentText(message.content).trim() || text;
+    const said = contentText(message.content).trim();
     const calls: any[] = message.tool_calls ?? [];
+    if (!said && !calls.length) {
+      const reason = data.choices[0].finish_reason;
+      console.warn(`${label}: antwoord zonder tekst (${reason ?? 'onbekend'}, ${maxTokens} tokens ruimte)`);
+      if (reason === 'length' && maxTokens < 8000) { maxTokens = Math.min(8000, maxTokens * 4); step--; continue; }
+      return text || NO_ANSWER;
+    }
+    text = said || text;
     messages.push({ role: 'assistant', content: message.content ?? '', ...(calls.length ? { tool_calls: calls } : {}) });
     if (!calls.length) return text;
     for (const call of calls) {
@@ -177,7 +208,7 @@ async function openaiCompatible(config: AIConfig, input: ConverseInput): Promise
       messages.push({ role: 'tool', tool_call_id: call.id, content: result.content });
     }
   }
-  return text || 'Ik ben er nog niet uit. Kun je het anders formuleren?';
+  return text || NO_ANSWER;
 }
 
 /** Korte test van een koppeling, zonder tools. */
@@ -205,7 +236,7 @@ export async function listModels(config: AIConfig): Promise<string[]> {
       const page = await new Anthropic({ apiKey: config.key, maxRetries: 1, timeout: 20_000 }).models.list({ limit: 100 });
       ids = page.data.map((m: { id: string }) => m.id);
     } catch (error) {
-      if (error instanceof Anthropic.APIError) throw apiProblem(error.status, label);
+      if (error instanceof Anthropic.APIError) throw apiProblem(error.status, label, error.message, config.key);
       throw new Problem(502, `${label} is niet bereikbaar.`);
     }
   } else {
@@ -218,9 +249,9 @@ export async function listModels(config: AIConfig): Promise<string[]> {
     } catch {
       throw new Problem(502, `${label} is niet bereikbaar.`);
     }
-    if (!response.ok) throw apiProblem(response.status, label);
+    if (!response.ok) throw apiProblem(response.status, label, await response.text().catch(() => ''), config.key);
     const data = await response.json().catch(() => null);
-    ids = (Array.isArray(data?.data) ? data.data : []).map((m: any) => m?.id).filter((id: unknown) => typeof id === 'string');
+    ids =(Array.isArray(data?.data) ? data.data : []).map((m: any) => m?.id).filter((id: unknown) => typeof id === 'string');
     // OpenAI geeft ook beeld-, spraak- en embeddingmodellen: alleen chatmodellen tonen.
     if (config.provider === 'openai') ids = ids.filter(id => /^(gpt|o\d|chatgpt)/.test(id) && !/(audio|realtime|transcribe|tts|image|search|embedding)/.test(id));
     if (config.provider === 'mistral') ids = ids.filter(id => !/(embed|moderation|ocr)/.test(id));
