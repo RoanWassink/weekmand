@@ -65,6 +65,17 @@ export type MenuIdea = { date: string; recipeId: string } | { date: string; name
 /** Stelt het menu samen met een AI; null: geen AI gekoppeld. */
 export type MenuPlanner = (input: MenuRequest) => Promise<MenuIdea[] | null>;
 export type ProductClassifier = (names: string[]) => Promise<{ name: string; category: BudgetCategory; kind: SpendKind }[] | null>;
+/** Een lastige productkeuze: welk Picnic-product past bij dit ingrediënt, in deze gerechten? */
+export type ProductChoice = { key: string; ingredient: string; unit: string; recipes: string[]; rejected?: string; candidates: { id: string; name: string; unitQuantity: string; cents: number }[] };
+/** productId null: geen enkel product past (dan kiest het huishouden zelf). null als geheel: geen AI. */
+export type ProductChooser = (asks: ProductChoice[]) => Promise<{ key: string; productId: string | null; reason: string }[] | null>;
+/** Een automatisch gekozen product om na te kijken. */
+export type LinkReview = { key: string; ingredient: string; product: string; recipes: string[] };
+export type LinkReviewer = (links: LinkReview[]) => Promise<{ key: string; fits: boolean; reason: string }[] | null>;
+/** Oordeel van de AI over het product dat nu aan een ingrediënt hangt (per product-id). */
+type LinkCheck = { productId: string; fits: boolean; reason?: string; at: number };
+/** Een keuze die tijdens het koppelen naar de AI gaat. redo: het afgekeurde product dat nu gekoppeld is. */
+type Ask = { def: IngredientDef; results: ShopProduct[]; fits: ShopProduct[]; candidates: ShopProduct[]; fallback: ShopProduct; redo?: ProductLink };
 type BudgetPrefs = { monthCents?: number; limits?: Partial<Record<BudgetCategory, number>> };
 /** De laatste mandberekening met de Picnic-mand waarmee hij gemaakt is, voor na een herstart. */
 type PlanSnapshot = { at: number; shopMode: ShopMode; plan: Awaited<ReturnType<Weekmand['plan']>>; cart: ShopCart; cartAt: number };
@@ -76,6 +87,11 @@ const categories: Category[] = ['groente-fruit', 'aardappel', 'vlees', 'vis', 'v
 export function acceptable(def: IngredientDef, productName: string) {
   const words = normalize(productName);
   return !(def.avoid ?? []).some(w => words.includes(normalize(w)));
+}
+
+/** Heet het product precies zoals het ingrediënt (naam of synoniem)? Dan valt er niets af te wegen. */
+function exactProduct(def: IngredientDef, productName: string) {
+  return [normalize(def.name), def.key.replace(/-/g, ' '), ...(def.aliases ?? []).map(normalize)].includes(baseName(productName));
 }
 
 export function baseName(name: string) {
@@ -147,6 +163,10 @@ export class Weekmand {
   recipeAdapter?: RecipeAdapter;
   /** Stelt het weekmenu samen met de AI (bekende en nieuwe gerechten); gezet door de assistent. */
   menuPlanner?: MenuPlanner;
+  /** Weegt lastige productkeuzes af met de AI (welke roerbakmix bij nasi); gezet door de assistent. */
+  productChooser?: ProductChooser;
+  /** Kijkt automatisch gekozen producten na met de AI; gezet door de assistent. */
+  linkReviewer?: LinkReviewer;
   /** Zoekt een nieuw gerecht op een receptensite (tests vervangen dit). */
   webRecipe: (query: string) => Promise<Preview | null> = query => findWebRecipe(query, this.catalog);
   /** Leest een foto van een kassabon; gezet door de assistent. null: geen AI. */
@@ -1241,15 +1261,20 @@ export class Weekmand {
     for (const k of keys) {
       const link = this.store.link(k);
       const def = this.catalog.ingredient(k);
-      if (link?.auto && def && !acceptable(def, link.name)) {
-        this.store.deleteLink(k);
-        this.store.update<Record<string, unknown>>('variants', {}, v => { const { [k]: _gone, ...rest } = v; return rest; });
-      }
+      if (link?.auto && def && !acceptable(def, link.name)) this.#dropLink(k);
     }
-    const missing = keys.filter(k => !this.store.link(k) && !(misses[k] && this.now() - misses[k] < day)).slice(0, 12);
-    const stale = refresh ? keys.filter(k => this.store.link(k) && this.now() - (variants[k]?.at ?? 0) > 20 * 36e5).slice(0, 6) : [];
+    const recent = (k: string) => !!misses[k] && this.now() - misses[k] < day;
+    const missing = keys.filter(k => !this.store.link(k) && !recent(k)).slice(0, 12);
+    // Automatisch gekozen en door de AI afgekeurd (Hollandse roerbak voor nasi): opnieuw kiezen.
+    const checks = this.store.get<Record<string, LinkCheck>>('linkChecks', {});
+    const rejected = keys.filter(k => {
+      const link = this.store.link(k);
+      return link?.auto && checks[k]?.productId === link.productId && !checks[k].fits && !recent(k);
+    }).slice(0, 4);
+    const stale = refresh ? keys.filter(k => this.store.link(k) && !rejected.includes(k) && this.now() - (variants[k]?.at ?? 0) > 20 * 36e5).slice(0, 6) : [];
+    const asks: Ask[] = [];
     let searched = 0;
-    for (const key of [...missing, ...stale]) {
+    for (const key of [...missing, ...rejected, ...stale]) {
       const def = this.catalog.ingredient(key);
       if (!def) continue;
       if (searched++ && this.searchPause) await new Promise(r => setTimeout(r, this.searchPause));
@@ -1264,18 +1289,114 @@ export class Weekmand {
       }
       for (const r of results) this.#searchCache.set(r.id, r);
       let link = this.store.link(key);
-      if (!link) {
-        // Liefst een product dat precies dit ingrediënt is ("Rode paprika"), anders het eerste dat past.
-        const fits = results.filter(r => r.available && packAmount(r.unitQuantity, def) && acceptable(def, r.name));
-        const match = fits.find(r => this.catalog.resolve(r.name)?.key === key) ?? fits[0];
-        if (!match) { misses[key] = this.now(); continue; }
-        link = { key, productId: match.id, name: match.name, unitQuantity: match.unitQuantity, packAmount: packAmount(match.unitQuantity, def)!, cents: match.cents, auto: true, updatedAt: new Date(this.now()).toISOString() };
-        this.store.saveLink(link);
+      const redo = rejected.includes(key) ? link! : undefined;
+      if (!link || redo) {
+        const fits = results.filter(r => r.available && packAmount(r.unitQuantity, def) && acceptable(def, r.name) && !(redo && baseName(r.name) === baseName(redo.name)));
+        if (!fits.length) { misses[key] = this.now(); continue; }
+        const exact = fits.find(r => exactProduct(def, r.name));
+        const kinds = [...new Map(fits.map(r => [baseName(r.name), r])).values()];
+        // Een echte keuze tussen verschillende producten: de AI weegt af, met de gerechten erbij.
+        if (!exact && kinds.length > 1 && this.productChooser) {
+          asks.push({ def, results, fits, redo, fallback: fits.find(r => this.catalog.resolve(r.name)?.key === key) ?? fits[0], candidates: kinds.slice(0, 10) });
+          continue;
+        }
+        // Zonder AI (of zonder keuze): liefst precies dit ingrediënt ("Rode paprika"), anders het eerste dat past.
+        link = this.#autoLink(def, exact ?? fits.find(r => this.catalog.resolve(r.name)?.key === key) ?? fits[0]);
       }
       this.#saveVariants(def, link, results);
     }
+    if (asks.length) await this.#choose(asks, misses, checks);
     this.store.set('linkMisses', misses);
     return searched;
+  }
+
+  #autoLink(def: IngredientDef, product: ShopProduct): ProductLink {
+    const link: ProductLink = { key: def.key, productId: product.id, name: product.name, unitQuantity: product.unitQuantity, packAmount: packAmount(product.unitQuantity, def)!, cents: product.cents, auto: true, updatedAt: new Date(this.now()).toISOString() };
+    this.store.saveLink(link);
+    return link;
+  }
+
+  /**
+   * Lastige productkeuzes in één keer aan de AI voorleggen. Past volgens de AI niets, dan liever
+   * geen product (het voorstel meldt het, het huishouden kiest zelf) dan een verkeerd. Zonder
+   * antwoord: een nieuw ingrediënt krijgt het eerste passende product, een afgekeurd blijft staan.
+   */
+  async #choose(asks: Ask[], misses: Record<string, number>, checks: Record<string, LinkCheck>) {
+    const request: ProductChoice[] = asks.map(a => ({
+      key: a.def.key, ingredient: a.def.name, unit: a.def.unit, recipes: this.#usedIn(a.def.key), ...(a.redo ? { rejected: a.redo.name } : {}),
+      candidates: a.candidates.map(c => ({ id: c.id, name: c.name, unitQuantity: c.unitQuantity, cents: c.cents })),
+    }));
+    const answers = await withTimeout(this.productChooser!(request), 90_000).catch(error => { console.error('Product kiezen:', (error as Error).message); return null; });
+    for (const ask of asks) {
+      const key = ask.def.key;
+      const answer = answers?.find(a => a.key === key);
+      const pick = answer?.productId ? ask.fits.find(r => r.id === answer.productId) : undefined;
+      if (answer && answer.productId === null) {
+        console.log(`Product voor ${ask.def.name}: geen passend gevonden (${answer.reason})`);
+        if (ask.redo) this.#dropLink(key);
+        misses[key] = this.now();
+        continue;
+      }
+      const product = pick ?? (ask.redo ? undefined : ask.fallback);
+      if (!product) continue;
+      if (pick) {
+        console.log(`Product voor ${ask.def.name}: ${pick.name}${ask.redo ? ` in plaats van ${ask.redo.name}` : ''} (${answer!.reason})`);
+        checks[key] = { productId: pick.id, fits: true, reason: answer!.reason, at: this.now() };
+      }
+      this.#saveVariants(ask.def, this.#autoLink(ask.def, product), ask.results);
+    }
+    this.store.set('linkChecks', checks);
+  }
+
+  #dropLink(key: string) {
+    this.store.deleteLink(key);
+    this.store.update<Record<string, unknown>>('variants', {}, v => { const { [key]: _gone, ...rest } = v; return rest; });
+  }
+
+  /** In welke gerechten een ingrediënt zit: eerst wat op het menu staat, dan andere recepten. */
+  #usedIn(key: string): string[] {
+    const today = localDate(this.now());
+    const planned = this.store.meals(today, addDays(today, 21)).flatMap(m => this.catalog.recipe(m.recipeId) ?? []);
+    const names = [...planned, ...this.catalog.recipes()].filter(r => r.ingredients.some(i => i.key === key)).map(r => r.name);
+    return [...new Set(names)].slice(0, 6);
+  }
+
+  /** Zijn er automatisch gekozen producten die de AI nog niet heeft nagekeken? */
+  linkReviewDue() {
+    if (!this.linkReviewer || this.shopMode !== 'picnic') return false;
+    const checks = this.store.get<Record<string, LinkCheck>>('linkChecks', {});
+    return this.store.links().some(l => l.auto && checks[l.key]?.productId !== l.productId);
+  }
+
+  /**
+   * Automatisch gekozen producten één keer laten nakijken door de AI (eerst wat op het menu staat).
+   * Een afgekeurd product kiest de volgende mandberekening opnieuw, met de AI. Zelf gekozen
+   * producten blijven buiten schot.
+   */
+  async reviewLinks(limit = 25): Promise<{ reviewed: number; rejected: string[] }> {
+    if (!this.linkReviewDue()) return { reviewed: 0, rejected: [] };
+    const checks = this.store.get<Record<string, LinkCheck>>('linkChecks', {});
+    const today = localDate(this.now());
+    const planned = new Set(this.store.meals(today, addDays(today, 21)).flatMap(m => this.catalog.recipe(m.recipeId)?.ingredients.map(i => i.key) ?? []));
+    const todo = this.store.links().filter(l => l.auto && checks[l.key]?.productId !== l.productId && this.catalog.ingredient(l.key))
+      .sort((a, b) => Number(planned.has(b.key)) - Number(planned.has(a.key)))
+      .slice(0, limit)
+      .map(l => ({ link: l, item: { key: l.key, ingredient: this.catalog.ingredient(l.key)!.name, product: l.name, recipes: this.#usedIn(l.key) } }));
+    const answers = await this.linkReviewer!(todo.map(t => t.item));
+    if (!answers) return { reviewed: 0, rejected: [] };
+    const rejected: string[] = [];
+    for (const { link, item } of todo) {
+      const answer = answers.find(a => a.key === item.key);
+      if (!answer || this.store.link(item.key)?.productId !== link.productId) continue;
+      checks[item.key] = { productId: link.productId, fits: answer.fits, reason: answer.reason, at: this.now() };
+      if (!answer.fits) {
+        rejected.push(`${item.ingredient}: ${item.product}`);
+        console.log(`Product afgekeurd voor ${item.ingredient}: ${item.product} (${answer.reason})`);
+      }
+    }
+    this.store.set('linkChecks', checks);
+    if (rejected.length) this.changed();
+    return { reviewed: todo.length, rejected };
   }
 
   /** Maten en aanbiedingsprijzen verversen (op de achtergrond, rustig aan). */

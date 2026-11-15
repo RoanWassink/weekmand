@@ -1,6 +1,6 @@
 import { converse, defaultPrices, labelOf, listModels, modelOf, onUsage, providers, testConnection, visionModels } from './ai.ts';
 import type { AIConfig, ImageInput, Provider, Usage } from './ai.ts';
-import type { AdaptedRecipe, MenuIdea, MenuRequest, ReceiptMatch, RecipeAdapter, Weekmand } from './app.ts';
+import type { AdaptedRecipe, LinkReview, MenuIdea, MenuRequest, ProductChoice, ReceiptMatch, RecipeAdapter, Weekmand } from './app.ts';
 import { budgetCategories, categoryKeys, kindKeys } from './budget.ts';
 import type { BudgetCategory, ReceiptPhoto, SpendKind } from './budget.ts';
 import { normalize } from './catalog.ts';
@@ -317,6 +317,114 @@ Twijfel je tussen nodig en extra, kies dan nodig. Roep deel_in precies één kee
       },
       maxSteps: 2,
       maxTokens: 4000,
+      effort: 'low',
+    });
+    return answers;
+  }
+
+  /**
+   * Lastige productkeuzes afwegen: welk Picnic-product past bij een ingrediënt, gezien de gerechten
+   * waarin het zit. Naar de AI gaan alleen ingrediënt, gerechtnamen en productnamen met maat en prijs.
+   * null: geen AI, of de AI gaf geen bruikbaar antwoord.
+   */
+  async chooseProducts(asks: ProductChoice[]): Promise<{ key: string; productId: string | null; reason: string }[] | null> {
+    const active = this.config();
+    if (!active || !asks.length) return null;
+    let answers: { key: string; productId: string | null; reason: string }[] | null = null;
+    await converse(active.config, {
+      system: `Je kiest voor een Nederlands huishouden welk Picnic-product bij een ingrediënt van hun recepten hoort. Weeg per ingrediënt af:
+- Het product moet passen in de gerechten waarin het ingrediënt zit. Een Hollandse roerbakmix hoort niet in nasi of een Aziatische roerbakschotel; puntpaprika is geen paprika om te vullen; een kant-en-klare maaltijd, saus of kruidenmix is geen losse groente.
+- Kies het gewone product dat een Nederlandse thuiskok hiervoor zou kopen, niet per se het goedkoopste. Op de maat hoef je niet te letten; die regelt de app.
+- Staat er een afgekeurd product bij, dan paste dat niet; kies iets anders.
+- Past geen enkel product echt, kies dan 0: dan kiest het huishouden zelf. Liever niets dan iets verkeerds.
+Roep kies_producten precies één keer aan, met een keuze voor elk ingrediënt en een korte reden in het Nederlands.`,
+      context: 'Elk ingrediënt staat tussen [vierkante haken] met daaronder de genummerde producten van Picnic.',
+      history: [],
+      message: asks.map(a => [
+        `[${a.key}] ${a.ingredient} (${a.unit}). Gerechten: ${a.recipes.join(', ') || 'onbekend'}.${a.rejected ? ` Afgekeurd: ${a.rejected}.` : ''}`,
+        ...a.candidates.map((c, i) => `  ${i + 1}. ${c.name}, ${c.unitQuantity}, ${euro(c.cents)}`),
+      ].join('\n')).join('\n\n'),
+      tools: [{
+        name: 'kies_producten', description: 'Sla de gekozen producten op.',
+        input: {
+          type: 'object', required: ['keuzes'], additionalProperties: false,
+          properties: {
+            keuzes: {
+              type: 'array',
+              items: {
+                type: 'object', required: ['sleutel', 'keuze', 'reden'], additionalProperties: false,
+                properties: {
+                  sleutel: { type: 'string', description: 'De sleutel tussen de vierkante haken.' },
+                  keuze: { type: 'integer', minimum: 0, description: 'Het nummer van het product; 0 als geen enkel product past.' },
+                  reden: { type: 'string', description: 'Korte reden, hooguit één zin.' },
+                },
+              },
+            },
+          },
+        },
+      }],
+      run: async call => {
+        if (call.name !== 'kies_producten') return { content: 'Onbekende tool.', isError: true };
+        const rows = (call.input as { keuzes?: unknown })?.keuzes;
+        answers = (Array.isArray(rows) ? rows : []).flatMap((r: any) => {
+          const ask = asks.find(a => a.key === r?.sleutel);
+          const n = Number(r?.keuze);
+          if (!ask || !Number.isInteger(n) || n < 0 || n > ask.candidates.length) return [];
+          return [{ key: ask.key, productId: n === 0 ? null : ask.candidates[n - 1].id, reason: String(r.reden ?? '').slice(0, 200) }];
+        });
+        return { content: 'Opgeslagen.', isError: false };
+      },
+      maxSteps: 2,
+      maxTokens: 4000,
+      effort: 'low',
+    });
+    return answers;
+  }
+
+  /**
+   * Automatisch gekozen producten nakijken: past het product bij het ingrediënt en de gerechten?
+   * Ruimhartig: alleen duidelijk verkeerde producten afkeuren. null: geen AI of geen antwoord.
+   */
+  async reviewProductLinks(links: LinkReview[]): Promise<{ key: string; fits: boolean; reason: string }[] | null> {
+    const active = this.config();
+    if (!active || !links.length) return null;
+    let answers: { key: string; fits: boolean; reason: string }[] | null = null;
+    await converse(active.config, {
+      system: `Je controleert voor een Nederlands huishouden of automatisch gekozen Picnic-producten passen bij de ingrediënten van hun recepten. Per regel: het ingrediënt, de gerechten waarin het zit en het gekozen product.
+Keur een product alleen af (past = false) als het duidelijk niet het bedoelde product is, of niet in die gerechten past: een Hollandse roerbakmix voor nasi of een Aziatische roerbakschotel, puntpaprika om te vullen, een kant-en-klare maaltijd, saus of kruidenmix in plaats van het ingrediënt zelf, of iets heel anders.
+Een ander merk, een biologische of voordeelvariant of een andere maat is prima. Twijfel je, dan past het.
+Roep beoordeel precies één keer aan met alle regels, elk met een korte reden in het Nederlands.`,
+      context: 'Elke regel: [sleutel] ingrediënt → gekozen product (gerechten).',
+      history: [],
+      message: links.map(l => `[${l.key}] ${l.ingredient} → ${l.product} (${l.recipes.join(', ') || 'geen vast gerecht'})`).join('\n'),
+      tools: [{
+        name: 'beoordeel', description: 'Sla het oordeel over alle gekozen producten op.',
+        input: {
+          type: 'object', required: ['regels'], additionalProperties: false,
+          properties: {
+            regels: {
+              type: 'array',
+              items: {
+                type: 'object', required: ['sleutel', 'past', 'reden'], additionalProperties: false,
+                properties: {
+                  sleutel: { type: 'string', description: 'De sleutel tussen de vierkante haken.' },
+                  past: { type: 'boolean' },
+                  reden: { type: 'string', description: 'Korte reden, hooguit één zin.' },
+                },
+              },
+            },
+          },
+        },
+      }],
+      run: async call => {
+        if (call.name !== 'beoordeel') return { content: 'Onbekende tool.', isError: true };
+        const rows = (call.input as { regels?: unknown })?.regels;
+        answers = (Array.isArray(rows) ? rows : []).flatMap((r: any) => links.some(l => l.key === r?.sleutel) && typeof r.past === 'boolean'
+          ? [{ key: String(r.sleutel), fits: r.past, reason: String(r.reden ?? '').slice(0, 200) }] : []);
+        return { content: 'Opgeslagen.', isError: false };
+      },
+      maxSteps: 2,
+      maxTokens: 6000,
       effort: 'low',
     });
     return answers;
