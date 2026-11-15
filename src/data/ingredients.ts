@@ -869,6 +869,14 @@ export const ingredients: IngredientDef[] = [
     ],
   },
   {
+    // Voor nasi en bami: gesneden kool, prei en wortel. Geen gewone (Hollandse) roerbakmix.
+    key: 'nasi-groente', name: 'Bami- en nasigroente', unit: 'g', category: 'groente-fruit',
+    query: 'bami nasi groente', aliases: ['nasigroente', 'bamigroente', 'nasi groente', 'bami groente', 'bami nasi mix', 'nasi bami mix', 'bami en nasi mix'],
+    packs: [
+      { id: 'nasi-groente-450', name: 'Bami- en nasigroente 450 g', amount: 450, unit: 'g', cents: 189 },
+    ],
+  },
+  {
     key: 'friet', name: 'Friet', unit: 'g', category: 'diepvries',
     query: 'friet diepvries', aliases: ['patat', 'frietjes'],
     packs: [

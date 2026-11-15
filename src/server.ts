@@ -35,6 +35,8 @@ app.productClassifier = names => assistant.classifyProducts(names);
 app.receiptReader = (image, today) => assistant.readReceiptPhoto(image, today);
 app.recipeAdapter = (recipe, note) => assistant.adaptRecipe(recipe, note);
 app.menuPlanner = input => assistant.planMenu(input);
+app.productChooser = asks => assistant.chooseProducts(asks);
+app.linkReviewer = links => assistant.reviewProductLinks(links);
 const publicUrl = process.env.PUBLIC_URL;
 wireNotices(app, publicUrl);
 

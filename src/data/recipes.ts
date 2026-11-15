@@ -311,7 +311,7 @@ export const recipes: RecipeDef[] = [
     ingredients: [
       { key: 'rijst', amount: 75, unit: 'g' },
       { key: 'kippendij', amount: 110, unit: 'g' },
-      { key: 'wokgroente', amount: 100, unit: 'g' },
+      { key: 'nasi-groente', amount: 100, unit: 'g' },
       { key: 'ei', amount: 1, unit: 'st' },
       { key: 'ui', amount: 0.5, unit: 'st' },
       { key: 'knoflook', amount: 1, unit: 'st' },
@@ -327,7 +327,7 @@ export const recipes: RecipeDef[] = [
     ingredients: [
       { key: 'mie', amount: 80, unit: 'g' },
       { key: 'kipfilet', amount: 100, unit: 'g' },
-      { key: 'wokgroente', amount: 120, unit: 'g' },
+      { key: 'nasi-groente', amount: 120, unit: 'g' },
       { key: 'knoflook', amount: 1, unit: 'st' },
       { key: 'ui', amount: 0.5, unit: 'st' },
       { key: 'ketjap', amount: 15, unit: 'ml' },

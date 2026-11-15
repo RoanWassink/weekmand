@@ -2,6 +2,12 @@
 
 Per versie in gewone taal wat er voor jullie verandert. Nieuwste bovenaan. Het updatevenster in Weekmand laat deze punten zien.
 
+## 2.5.0 — 15 november 2026
+
+- Lastige productkeuzes weegt de AI nu af, met de gerechten erbij. Voor roerbakgroenten in Aziatische gerechten kiest Weekmand bijvoorbeeld een Chinese wokmix in plaats van Hollandse roerbak. Past echt niets, dan kiest Weekmand niets en vraagt het voorstel jullie om een product.
+- Producten die Weekmand eerder vanzelf koos, kijkt de AI één keer na. Wat duidelijk niet klopt (Polpa als tomaten, Crispy maïs als maïs), kiest Weekmand opnieuw. Zelf gekozen producten blijven staan.
+- Nasi en bami hebben hun eigen bami- en nasigroente.
+
 ## 2.4.1 — 15 november 2026
 
 - De chat liep vast na een leeg antwoord: Mistral weigerde daarna elk bericht in dat gesprek ("weigert de aanvraag"). Een leeg antwoord blokkeert het gesprek nu niet meer, en Weekmand geeft zelf nooit meer een leeg antwoord.

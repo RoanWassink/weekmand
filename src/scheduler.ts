@@ -75,6 +75,11 @@ export class Scheduler {
           app.store.set('lastPriceRefresh', app.now());
           await app.refreshPrices().catch(error => console.error('Prijzen:', error.message));
         }
+        // Automatisch gekozen producten laten nakijken door de AI: elk kwartier een portie, tot alles gezien is.
+        if (app.linkReviewDue() && app.now() - app.store.get<number>('linkReviewLastTry', 0) > 15 * 60_000) {
+          app.store.set('linkReviewLastTry', app.now());
+          await app.reviewLinks().catch(error => console.error('Producten nakijken:', error.message));
+        }
       }
       // Elke vier uur nieuwe AH-kassabonnen; houdt meteen de AH-koppeling actief.
       if (app.ah.linked && app.now() - app.store.get<number>('ahLastTry', 0) > 4 * 36e5) {
