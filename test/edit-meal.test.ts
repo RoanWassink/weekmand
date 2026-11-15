@@ -44,3 +44,34 @@ test('gerecht zelf bewerken: eigen versie voor die dag, het origineel blijft, en
   assert.throws(() => app.editMeal({ date: d2, name: 'Leeg', ingredients: [] }), /minstens één ingrediënt/);
   assert.throws(() => app.editMeal({ date: '2030-01-01', name: 'X', ingredients: [{ name: 'Paprika', amount: 1, unit: 'st' }] }), /geen gerecht/);
 });
+
+test('recept zelf bewerken vanuit Recepten: geldt overal; een ingebouwd recept kan terug naar het origineel', async () => {
+  const { app } = makeApp();
+  const original = structuredClone(app.catalog.recipe('pasta-carbonara')!);
+  assert.equal(app.recipeDetail('pasta-carbonara').overridesBuiltin, false);
+  // Hoeveelheden voor 4 personen.
+  const r = app.editRecipe({ id: 'pasta-carbonara', servings: 4, name: 'Pasta carbonara met erwtjes', minutes: 20,
+    ingredients: [{ name: 'Spaghetti', amount: 400, unit: 'g' }, { name: 'Spekblokjes', amount: 200, unit: 'g' }, { name: 'Doperwten', amount: 300, unit: 'g' }] });
+  assert.equal(r.overridesBuiltin, true);
+  const mine = app.catalog.recipe('pasta-carbonara')!;
+  assert.deepEqual([mine.name, mine.source, mine.minutes], ['Pasta carbonara met erwtjes', 'user', 20]);
+  assert.equal(mine.ingredients.find(i => i.key === app.catalog.resolve('spaghetti')!.key)!.amount, 100, 'per persoon');
+  assert.equal(app.catalog.recipes().filter(x => x.id === 'pasta-carbonara').length, 1, 'geen dubbel recept');
+  assert.equal(app.recipeDetail('pasta-carbonara').overridesBuiltin, true);
+  app.restoreRecipe('pasta-carbonara');
+  assert.deepEqual(app.catalog.recipe('pasta-carbonara'), original, 'het origineel is terug');
+  assert.throws(() => app.restoreRecipe('pasta-carbonara'), /geen eigen versie/);
+});
+
+test('een al gegeten gerecht bewerken gaat niet nog eens van de voorraad af', async () => {
+  const { app, clock } = makeApp();
+  const w = await app.window();
+  await app.setMeal({ date: w.dates[0], recipeId: 'gevulde-paprika', servings: 2 });
+  app.store.markOrdered([w.dates[0]]);
+  clock.now = Date.parse(w.dates[0] + 'T21:00:00Z') + 86_400_000;
+  app.consumePastMeals();
+  assert.equal((app.store.meal(w.dates[0]) as { consumed: boolean }).consumed, true);
+  app.editMeal({ date: w.dates[0], name: 'Gevulde paprika (zoals we hem echt maakten)', ingredients: [{ name: 'Paprika', amount: 2, unit: 'st' }] });
+  assert.equal((app.store.meal(w.dates[0]) as { consumed: boolean }).consumed, true, 'blijft gegeten');
+  assert.equal(app.recipeHistory().find(h => h.date === w.dates[0])!.name, 'Gevulde paprika (zoals we hem echt maakten)');
+});

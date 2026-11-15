@@ -78,6 +78,8 @@ export class Catalog {
     return this.#recipes;
   }
   recipe(id: string) { return this.#recipeMap().get(id); }
+  /** Is er een ingebouwd recept met deze id (ook als een eigen versie het vervangt)? */
+  isBuiltin(id: string) { return builtinRecipes.some(r => r.id === id); }
 
   /**
    * Zoek het ingrediënt dat bij vrije tekst of een productnaam hoort: 'kip', 'krat bier',

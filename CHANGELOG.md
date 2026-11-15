@@ -2,6 +2,12 @@
 
 Per versie in gewone taal wat er voor jullie verandert. Nieuwste bovenaan. Het updatevenster in Weekmand laat deze punten zien.
 
+## 2.4.0 — 15 november 2026
+
+- Elk recept heeft een knop Bewerken. Vanuit een dag (Menu, Deze week, Gegeten) pas je alleen die dag aan; vanuit Recepten het recept zelf, en een ingebouwd recept kun je terugzetten naar het origineel.
+- Wat je aan het bewerken bent blijft bewaard: ook als je even naar een ander tabblad of andere app gaat, of het venster sluit om iets na te kijken. Alleen Annuleren gooit het weg.
+- Een open recept komt terug als je telefoon Weekmand op de achtergrond opnieuw laadde, handig tijdens het koken.
+
 ## 2.3.0 — 14 november 2026
 
 - Onder Meer staat naast het versienummer de knop Zoek naar updates: Weekmand kijkt meteen op GitHub.

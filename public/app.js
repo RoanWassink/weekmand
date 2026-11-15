@@ -204,6 +204,8 @@ async function run(fn, { reload = true } = {}) {
 }
 
 function dialog(title, ...content) {
+  // Alleen een recept of een bewerking komt na een herlaad terug; die zetten dat zelf na dialog().
+  try { localStorage.removeItem('weekmand-open-venster'); } catch { /* geen opslag */ }
   $('dialog-title').textContent = title;
   put($('dialog-body'), ...content);
   if (!$('dialog').open) $('dialog').showModal();
@@ -478,56 +480,105 @@ function renderPickBar() {
 }
 $('pick-edit').onclick = () => {
   const [date] = picked;
-  editMealDialog(date, () => { picked.clear(); $('pick-note').value = ''; }).catch(e => toast(e.message, true));
+  const day = S.menu.days.find(d => d.date === date && d.meal);
+  if (!day) return;
+  openEditor({ kind: 'meal', date, id: day.meal.id, servings: day.meal.servings, label: `${day.day} ${shortDate(date)}` },
+    () => { picked.clear(); $('pick-note').value = ''; }).catch(e => toast(e.message, true));
 };
 
+// ───────────── Open vensters en concepten bewaren ─────────────
+// Een telefoon laadt Weekmand soms opnieuw als je even naar een andere app of ander tabblad gaat. Een
+// open recept of een half bewerkt gerecht komt dan terug; een concept blijft ook staan als je het
+// venster sluit om iets anders te bekijken. Alleen Annuleren of Opslaan gooit het concept weg.
+const OPEN_KEY = 'weekmand-open-venster';
+const DRAFT_KEY = 'weekmand-concept';
+const keep = {
+  get(key) { try { return JSON.parse(localStorage.getItem(key) ?? 'null'); } catch { return null; } },
+  set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* geen opslag */ } },
+  drop(key) { try { localStorage.removeItem(key); } catch { /* geen opslag */ } },
+};
+/** Dit venster na een herlaad weer openen (hooguit drie uur later). */
+const rememberOpen = what => keep.set(OPEN_KEY, { ...what, at: Date.now() });
+$('dialog').addEventListener('close', () => keep.drop(OPEN_KEY));
+const draftKey = target => target.kind === 'meal' ? 'meal:' + target.date : 'recipe:' + target.id;
+function savedDraft(target) {
+  const d = keep.get(DRAFT_KEY);
+  return d && d.key === draftKey(target) && Date.now() - d.at < 7 * 86_400_000 ? d : null;
+}
+
+async function restoreOpenDialog() {
+  const open = keep.get(OPEN_KEY);
+  if (!open || Date.now() - open.at > 3 * 3_600_000) return keep.drop(OPEN_KEY);
+  if (open.kind === 'recipe') await showRecipe(open.id, open.servings, open.ctx);
+  else if (open.kind === 'edit') await openEditor(open.target);
+}
+
 /**
- * Een gerecht zelf aanpassen. Hoeveelheden voor het aantal porties van die dag; Weekmand bewaart het
- * als eigen versie (het origineel blijft staan), en zo staat het later ook onder Gegeten.
+ * Een gerecht of recept zelf aanpassen. target.kind 'meal': alleen die dag, als eigen versie (het
+ * origineel blijft staan; zo staat het later onder Gegeten). 'recipe': het recept zelf, voor overal.
+ * Hoeveelheden voor het aantal personen dat erbij staat.
  */
-async function editMealDialog(date, onSaved) {
-  const day = S.menu.days.find(d => d.date === date && d.meal) ?? S.menu.thisWeek?.find(d => d.date === date);
-  if (!day?.meal) return;
-  const m = day.meal;
-  const r = await api('recipe', { id: m.id, servings: m.servings });
+async function openEditor(target, onSaved) {
+  const r = await api('recipe', { id: target.id, servings: target.servings });
+  const draft = savedDraft(target);
+  const values = draft ?? { name: r.name, minutes: r.minutes, steps: r.steps ?? '', ingredients: r.ingredients.map(i => ({ name: i.name, amount: i.amount, unit: i.unit })) };
+  const servings = r.servings;
   const units = ['g', 'kg', 'ml', 'l', 'st', 'el', 'tl'];
-  const shown = (amount, unit) => unit === 'st' || amount < 10 ? Math.round(amount * 10) / 10 : Math.round(amount);
-  const name = el('input', { value: r.name, maxlength: 80, required: true, autocomplete: 'off' });
-  const minutes = el('input', { type: 'number', min: 5, max: 240, step: 5, inputmode: 'numeric', value: r.minutes });
+  const shown = (amount, unit) => amount === '' || amount === null ? '' : unit === 'st' || amount < 10 ? Math.round(amount * 10) / 10 : Math.round(amount);
+  const name = el('input', { value: values.name, maxlength: 80, required: true, autocomplete: 'off' });
+  const minutes = el('input', { type: 'number', min: 5, max: 240, step: 5, inputmode: 'numeric', value: values.minutes });
   const steps = el('textarea', { rows: 6, maxlength: 1500 });
-  steps.value = r.steps ?? '';
+  steps.value = values.steps;
   const rows = el('div', { class: 'edit-ingredients' });
+  const collect = () => [...rows.querySelectorAll('.edit-row')].map(row => ({
+    name: row.querySelector('.ing-name').value.trim(), amount: row.querySelector('.ing-amount').value === '' ? '' : Number(row.querySelector('.ing-amount').value), unit: row.querySelector('.ing-unit').value,
+  }));
+  // Elke wijziging meteen als concept bewaren.
+  const store = () => keep.set(DRAFT_KEY, { key: draftKey(target), at: Date.now(), name: name.value, minutes: Number(minutes.value) || r.minutes, steps: steps.value, ingredients: collect() });
   const addRow = (i = { name: '', amount: '', unit: 'g' }) => {
     const row = el('div', { class: 'edit-row' },
       el('input', { class: 'ing-name', value: i.name, list: 'ingredient-list', placeholder: 'Ingrediënt', 'aria-label': 'Ingrediënt', autocomplete: 'off' }),
-      el('input', { class: 'ing-amount', type: 'number', min: 0, step: 'any', inputmode: 'decimal', value: i.amount === '' ? '' : shown(i.amount, i.unit), 'aria-label': 'Hoeveelheid' }),
+      el('input', { class: 'ing-amount', type: 'number', min: 0, step: 'any', inputmode: 'decimal', value: shown(i.amount, i.unit), 'aria-label': 'Hoeveelheid' }),
       el('select', { class: 'ing-unit', 'aria-label': 'Eenheid' }, ...units.map(u => el('option', { value: u, selected: u === i.unit || undefined }, u))),
-      iconBtn('x', 'Ingrediënt weghalen', () => row.remove(), 'danger'));
+      iconBtn('x', 'Ingrediënt weghalen', () => { row.remove(); store(); }, 'danger'));
     rows.append(row);
     return row;
   };
-  for (const i of r.ingredients) addRow({ name: i.name, amount: i.amount, unit: i.unit });
+  for (const i of values.ingredients) addRow(i);
+  const discard = () => { keep.drop(DRAFT_KEY); closeDialog(); };
   const save = () => run(async () => {
-    const ingredients = [...rows.querySelectorAll('.edit-row')].map(row => ({
-      name: row.querySelector('.ing-name').value.trim(), amount: Number(row.querySelector('.ing-amount').value), unit: row.querySelector('.ing-unit').value,
-    })).filter(i => i.name && i.amount > 0);
+    const ingredients = collect().filter(i => i.name && i.amount > 0);
     if (!ingredients.length) throw new Error('Geef minstens één ingrediënt met een hoeveelheid.');
-    const res = await api('meal/edit', { date, name: name.value.trim(), minutes: Number(minutes.value) || r.minutes, steps: steps.value, ingredients });
+    const body = { name: name.value.trim(), minutes: Number(minutes.value) || r.minutes, steps: steps.value, ingredients };
+    const res = target.kind === 'meal' ? await api('meal/edit', { date: target.date, ...body }) : await api('recipe/edit', { id: target.id, servings, ...body });
+    keep.drop(DRAFT_KEY);
     closeDialog();
     onSaved?.();
     planStale = true;
-    toast(`${res.recipe.name} opgeslagen als jouw versie voor ${res.day}.`);
+    toast(target.kind === 'meal' ? `${res.recipe.name} opgeslagen als jouw versie voor ${res.day}.` : `${res.recipe.name} opgeslagen.`);
   });
-  dialog('Gerecht bewerken', el('form', { class: 'stack recipe-edit', onsubmit: e => { e.preventDefault(); save(); } },
-    el('p', { class: 'hint' }, `Alleen voor ${day.day} ${shortDate(date)}. Weekmand bewaart dit als jouw versie; het oorspronkelijke recept blijft staan.`),
+  const form = el('form', { class: 'stack recipe-edit', oninput: store, onchange: store, onsubmit: e => { e.preventDefault(); save(); } },
+    draft ? el('p', { class: 'hint draft-note' }, 'Je was dit aan het bewerken; je wijzigingen staan er nog. ',
+      el('button', { type: 'button', class: 'link', onclick: () => { keep.drop(DRAFT_KEY); openEditor(target, onSaved); } }, 'Opnieuw beginnen')) : null,
+    el('p', { class: 'hint' }, target.kind === 'meal'
+      ? `Alleen voor ${target.label}. Weekmand bewaart dit als jouw versie; het oorspronkelijke recept blijft staan.`
+      : 'Geldt voor dit recept overal, ook waar het al op het menu stond. Alleen voor één dag anders? Bewerk het dan vanuit het Menu.'),
     el('label', {}, 'Naam', name),
     el('label', {}, 'Bereidingstijd in minuten', minutes),
     el('div', { class: 'stack' },
-      el('p', { class: 'label' }, `Ingrediënten voor ${num.format(m.servings)} ${m.servings === 1 ? 'persoon' : 'personen'}`),
+      el('p', { class: 'label' }, `Ingrediënten voor ${num.format(servings)} ${servings === 1 ? 'persoon' : 'personen'}`),
       rows,
-      btn('Ingrediënt toevoegen', () => addRow().querySelector('.ing-name').focus(), 'ghost small')),
+      btn('Ingrediënt toevoegen', () => { addRow().querySelector('.ing-name').focus(); store(); }, 'ghost small')),
     el('label', {}, 'Bereiding', steps),
-    el('div', { class: 'row' }, el('button', { class: 'primary' }, 'Opslaan'), btn('Annuleren', closeDialog, 'ghost'))));
+    el('div', { class: 'row' }, el('button', { class: 'primary' }, 'Opslaan'), btn('Annuleren', discard, 'ghost')),
+    target.kind === 'recipe' && r.overridesBuiltin ? btn('Oorspronkelijk recept terugzetten', () => run(async () => {
+      await api('recipe/restore', { id: target.id });
+      keep.drop(DRAFT_KEY);
+      closeDialog();
+      toast('Het oorspronkelijke recept staat weer terug.');
+    }), 'ghost small') : null);
+  dialog(target.kind === 'meal' ? 'Gerecht bewerken' : 'Recept bewerken', form);
+  rememberOpen({ kind: 'edit', target });
 }
 $('pick-bar').onsubmit = e => {
   e.preventDefault();
@@ -556,7 +607,7 @@ function dayRow(day, portions) {
         el('div', { class: 'dish' },
           el('label', { class: 'pick', title: 'Aanvinken om te vervangen' },
             el('input', { type: 'checkbox', checked: picked.has(day.date) || undefined, 'aria-label': `${m.name} aanvinken om te vervangen`, onchange: toggle })),
-          el('button', { type: 'button', class: 'dish-name', onclick: () => showRecipe(m.id, servings) }, m.name),
+          el('button', { type: 'button', class: 'dish-name', onclick: () => showRecipe(m.id, servings, { date: day.date, label: `${day.day} ${shortDate(day.date)}` }) }, m.name),
           m.status === 'proposed' ? el('span', { class: 'pill proposed' }, 'voorstel') : null),
         el('p', { class: 'day-meta' }, `${m.minutes} min · ${m.tags.filter(t => !['favoriet', 'picnic', 'bewaard', 'besteld'].includes(t)).slice(0, 3).join(', ')}${m.note ? ' · ' + m.note : ''}`),
         el('div', { class: 'day-actions' },
@@ -617,13 +668,20 @@ function chooseDelivery() {
 
 const fmtDate = date => date ? dateFmt.format(new Date(date + 'T12:00:00')) : '';
 
-async function showRecipe(id, servings) {
+/**
+ * Een recept bekijken (om te koken). ctx = { date, label }: geopend vanuit een dag; Bewerken past dan
+ * alleen die dag aan. Zonder ctx (vanuit Recepten): Bewerken past het recept zelf aan.
+ */
+async function showRecipe(id, servings, ctx) {
   const r = await api('recipe', { id, servings }).catch(e => toast(e.message, true));
   if (!r) return;
+  const target = ctx?.date ? { kind: 'meal', date: ctx.date, id, servings: r.servings, label: ctx.label } : { kind: 'recipe', id, servings: r.servings };
   dialog(r.name,
     el('p', { class: 'muted' }, `${r.minutes} min · ${num.format(r.servings)} porties · ca. ${money(r.costPerPortionCents)} p.p.`),
     el('ul', {}, ...r.ingredients.map(i => el('li', {}, i.text))),
-    el('p', {}, r.steps));
+    el('p', {}, r.steps),
+    el('div', { class: 'row' }, btn(ctx?.date ? 'Bewerken voor deze dag' : 'Bewerken', () => openEditor(target).catch(e => toast(e.message, true)), 'secondary small')));
+  rememberOpen({ kind: 'recipe', id, servings, ...(ctx ? { ctx } : {}) });
 }
 
 async function pickRecipe(date, servings) {
@@ -1466,9 +1524,9 @@ function renderThisWeek(panel) {
       el('div', { class: 'row-main static' },
         el('span', { class: 'date-col' }, d.today ? 'Vandaag' : fmtShort(d.date)),
         el('span', { class: 'row-text' },
-          el('button', { type: 'button', class: 'link', onclick: () => showRecipe(d.meal.id, d.meal.servings) }, d.meal.name),
+          el('button', { type: 'button', class: 'link', onclick: () => showRecipe(d.meal.id, d.meal.servings, { date: d.date, label: `${d.day} ${shortDate(d.date)}` }) }, d.meal.name),
           el('span', { class: 'row-detail' }, [`${d.meal.minutes} min`, `${num.format(d.meal.servings)} p.`, d.meal.note].filter(Boolean).join(' · '))),
-        btn('Aanpassen', () => editMealDialog(d.date).catch(e => toast(e.message, true)), 'small ghost'))))));
+        btn('Aanpassen', () => openEditor({ kind: 'meal', date: d.date, id: d.meal.id, servings: d.meal.servings, label: `${d.day} ${shortDate(d.date)}` }).catch(e => toast(e.message, true)), 'small ghost'))))));
 }
 
 async function renderEaten(panel) {
@@ -1478,7 +1536,7 @@ async function renderEaten(panel) {
     el('div', { class: 'row-main static' },
       el('span', { class: 'date-col' }, fmtShort(h.date)),
       el('span', { class: 'row-text' },
-        el('button', { type: 'button', class: 'link', onclick: () => showRecipe(h.recipeId, h.servings) }, h.name),
+        el('button', { type: 'button', class: 'link', onclick: () => showRecipe(h.recipeId, h.servings, { date: h.date, label: `${h.day} ${shortDate(h.date)}` }) }, h.name),
         h.reason ? el('span', { class: 'row-detail' }, h.reason) : null),
       el('span', { class: 'rate-pair' },
         el('button', { type: 'button', class: 'icon-btn rate up', 'aria-pressed': String(h.rating === 'up'), 'aria-label': 'Lekker, bewaren als favoriet', title: 'Lekker', onclick: () => rate(h, 'up') }, icon('up')),
@@ -2438,5 +2496,7 @@ async function start() {
   }
   const tab = location.hash.slice(1);
   if (['week', 'cart', 'pantry', 'budget', 'recipes', 'chat', 'more'].includes(tab)) showTab(tab);
+  // Opnieuw geladen terwijl er een recept of bewerking open stond (bijv. na een andere app): weer openen.
+  if (!op) restoreOpenDialog().catch(() => {});
 }
 start();
