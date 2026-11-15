@@ -92,3 +92,64 @@ test('AI: verbruik per aanbieder en model, met geschatte kosten en eigen prijs',
   await assistant.use({ provider: 'deepseek', model: 'deepseek-pro' });
   assert.deepEqual(assistant.usage().months.map(m => m.month), ['2026-12', '2026-11']);
 });
+
+/** Nep-Mistral die net zo streng is als de echte: een lege beurt in het gesprek geeft fout 400. */
+function strictMistral(t: { mock: { method: Function } }, answers: object[]) {
+  const bodies: any[] = [];
+  t.mock.method(globalThis, 'fetch', async (_url: string, options: RequestInit = {}) => {
+    const body = JSON.parse(String(options.body));
+    bodies.push(body);
+    if (body.messages.some((m: any) => m.role === 'assistant' && !m.content && !m.tool_calls)) {
+      return Response.json({ object: 'error', message: 'Assistant message must have either content or tool_calls, but not none.', type: 'invalid_request_assistant_message', code: '3240' }, { status: 400 });
+    }
+    return Response.json(answers.shift() ?? { choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }] });
+  });
+  return bodies;
+}
+const thinkingOnly = (finish: string) => ({ choices: [{ finish_reason: finish, message: { content: [{ type: 'thinking', thinking: [{ type: 'text', text: 'Even nadenken…' }] }] } }] });
+const ask = (history: { role: 'user' | 'assistant'; content: string }[] = []) => ({
+  system: 'Test', context: 'Vandaag', history, message: 'Wat eten we?', tools: [], run: async () => ({ content: '', isError: true }),
+});
+
+test('AI: een leeg antwoord in de geschiedenis blokkeert het gesprek niet meer', async t => {
+  const { converse } = await import('../src/ai.ts');
+  const bodies = strictMistral(t, []);
+  const config = { provider: 'mistral' as const, key: 'mistral-sleutel-1234', model: 'mistral-large-latest' };
+  const reply = await converse(config, ask([{ role: 'user', content: 'Zet melk erbij' }, { role: 'assistant', content: '' }]));
+  assert.equal(reply, 'OK');
+  assert.deepEqual(bodies[0].messages.map((m: any) => m.content).slice(1, 3), ['Zet melk erbij', '(geen antwoord)']);
+});
+
+test('AI: alleen denkstappen geeft nooit een leeg antwoord; bij te weinig ruimte nog eens met meer', async t => {
+  const { converse } = await import('../src/ai.ts');
+  t.mock.method(console, 'warn', () => {});
+  const config = { provider: 'mistral' as const, key: 'mistral-sleutel-1234', model: 'mistral-large-latest' };
+
+  let bodies = strictMistral(t, [thinkingOnly('length'), { choices: [{ finish_reason: 'stop', message: { content: [{ type: 'thinking', thinking: [] }, { type: 'text', text: 'Pasta pesto.' }] } }] }]);
+  assert.equal(await converse(config, ask()), 'Pasta pesto.');
+  assert.deepEqual(bodies.map(b => b.max_tokens), [1500, 6000]);
+
+  t.mock.restoreAll();
+  t.mock.method(console, 'warn', () => {});
+  bodies = strictMistral(t, [thinkingOnly('stop')]);
+  assert.equal(await converse(config, ask()), 'Ik ben er nog niet uit. Kun je het anders formuleren?');
+  assert.equal(bodies.length, 1);
+});
+
+test('AI: een geweigerde aanvraag zegt niet meer ten onrechte dat het model-ID fout is', async t => {
+  const { converse } = await import('../src/ai.ts');
+  const logged: string[] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => { logged.push(args.join(' ')); });
+  const config = { provider: 'mistral' as const, key: 'mistral-sleutel-1234', model: 'mistral-large-latest' };
+  const reject = (message: string, type: string) => t.mock.method(globalThis, 'fetch', async () => Response.json({ object: 'error', message, type }, { status: 400 }));
+
+  reject('Assistant message must have either content or tool_calls, but not none. key mistral-sleutel-1234', 'invalid_request_assistant_message');
+  await assert.rejects(converse(config, ask()), (e: Error) => /weigert de aanvraag/.test(e.message) && !/model-ID/.test(e.message));
+  assert.match(logged.at(-1)!, /Mistral HTTP 400: .*Assistant message must have/);
+  assert.ok(!logged.join('\n').includes('mistral-sleutel-1234'), 'de sleutel komt nooit in het logboek');
+
+  t.mock.restoreAll();
+  t.mock.method(console, 'error', () => {});
+  reject('Invalid model: mistral-groot', 'invalid_model');
+  await assert.rejects(converse(config, ask()), /kent dit model niet\. Controleer het model-ID/);
+});

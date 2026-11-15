@@ -2,6 +2,11 @@
 
 Per versie in gewone taal wat er voor jullie verandert. Nieuwste bovenaan. Het updatevenster in Weekmand laat deze punten zien.
 
+## 2.4.1 — 15 november 2026
+
+- De chat liep vast na een leeg antwoord: Mistral weigerde daarna elk bericht in dat gesprek ("weigert de aanvraag"). Een leeg antwoord blokkeert het gesprek nu niet meer, en Weekmand geeft zelf nooit meer een leeg antwoord.
+- Bij een geweigerde aanvraag staat er niet meer ten onrechte "Controleer het model-ID"; dat zegt Weekmand alleen nog als het model echt onbekend is.
+
 ## 2.4.0 — 15 november 2026
 
 - Elk recept heeft een knop Bewerken. Vanuit een dag (Menu, Deze week, Gegeten) pas je alleen die dag aan; vanuit Recepten het recept zelf, en een ingebouwd recept kun je terugzetten naar het origineel.
